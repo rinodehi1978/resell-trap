@@ -1,0 +1,61 @@
+"""FastAPI application with lifespan-managed scraper and scheduler."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from .api.router import api_router
+from .config import settings
+from .database import init_db
+from .monitor.scheduler import MonitorScheduler
+from .notifier.log_notifier import LogNotifier
+from .notifier.webhook import WebhookNotifier
+from .scraper.yahoo import YahooAuctionScraper
+
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# Shared state accessible by API endpoints
+app_state: dict = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Initializing database...")
+    init_db()
+
+    scraper = YahooAuctionScraper()
+    app_state["scraper"] = scraper
+
+    notifiers = [LogNotifier()]
+    if settings.webhook_url:
+        notifiers.append(WebhookNotifier())
+
+    scheduler = MonitorScheduler(scraper, notifiers)
+    scheduler.start()
+    app_state["scheduler"] = scheduler
+
+    logger.info("Resell Trap started")
+    yield
+
+    # Shutdown
+    scheduler.shutdown()
+    await scraper.close()
+    app_state.clear()
+    logger.info("Resell Trap stopped")
+
+
+app = FastAPI(
+    title="Resell Trap",
+    description="ヤフオク→Amazon無在庫転売の在庫連動ツール",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+app.include_router(api_router)
