@@ -18,6 +18,7 @@ dependencies = [
     "apscheduler>=3.10,<4.0",
     "python-dotenv>=1.0",
     "python-amazon-sp-api>=0.20",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

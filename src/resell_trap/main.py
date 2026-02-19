@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from .api.router import api_router
 from .config import settings
-from .database import init_db
+from .database import run_migrations
 from .monitor.scheduler import MonitorScheduler
 from .notifier.log_notifier import LogNotifier
 from .notifier.webhook import WebhookNotifier
@@ -28,8 +28,8 @@ app_state: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Initializing database...")
-    init_db()
+    logger.info("Running database migrations...")
+    run_migrations()
 
     scraper = YahooAuctionScraper()
     app_state["scraper"] = scraper
