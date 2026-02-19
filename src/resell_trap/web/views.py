@@ -5,13 +5,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import MonitoredItem, StatusHistory
+from ..models import MonitoredItem, NotificationLog, StatusHistory
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,8 @@ router = APIRouter(tags=["web"])
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
+    from ..main import app_state
+
     items = db.query(MonitoredItem).order_by(MonitoredItem.created_at.desc()).all()
     stats = {
         "total": len(items),
@@ -33,11 +37,13 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "sold": sum(1 for i in items if i.status == "ended_sold"),
         "amazon_listed": sum(1 for i in items if i.amazon_sku),
     }
+    scheduler = app_state.get("scheduler")
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "active_page": "dashboard",
         "stats": stats,
         "recent_items": items[:10],
+        "scheduler_running": scheduler is not None and scheduler.running,
     })
 
 
@@ -71,11 +77,19 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
         .limit(50)
         .all()
     )
+    notifications = (
+        db.query(NotificationLog)
+        .filter(NotificationLog.item_id == item.id)
+        .order_by(NotificationLog.sent_at.desc())
+        .limit(50)
+        .all()
+    )
     return templates.TemplateResponse("item_detail.html", {
         "request": request,
         "active_page": "items",
         "item": item,
         "history": history,
+        "notifications": notifications,
     })
 
 
@@ -201,6 +215,31 @@ async def keepa_inline_partial(
     shipping_cost: int = 800,
 ):
     return await keepa_result_partial(request, asin, cost_price, shipping_cost)
+
+
+@router.post("/web/set-asin/{auction_id}")
+def set_asin(
+    auction_id: str,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """Set ASIN and cost parameters on an item (called from item detail UI)."""
+    item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
+    if not item:
+        return JSONResponse({"detail": "Item not found"}, status_code=404)
+
+    asin = data.get("asin", "").strip()
+    if not asin:
+        return JSONResponse({"detail": "ASIN is required"}, status_code=400)
+
+    item.amazon_asin = asin
+    if "estimated_win_price" in data:
+        item.estimated_win_price = int(data["estimated_win_price"])
+    if "shipping_cost" in data:
+        item.shipping_cost = int(data["shipping_cost"])
+    item.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return JSONResponse({"ok": True})
 
 
 class _Namespace:

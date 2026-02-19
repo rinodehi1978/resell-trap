@@ -2,7 +2,19 @@
 {% block title %}Dashboard - Resell Trap{% endblock %}
 
 {% block content %}
-<h1 class="text-xl font-bold text-gray-900 mb-4">Dashboard</h1>
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-bold text-gray-900">Dashboard</h1>
+  <div class="flex items-center gap-2">
+    <span class="text-xs text-gray-500">Scheduler:</span>
+    {% if scheduler_running %}
+    <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">Running</span>
+    <button onclick="schedulerAction('pause')" class="px-2 py-1 text-xs bg-yellow-100 text-yellow-700 hover:bg-yellow-200 rounded">Pause</button>
+    {% else %}
+    <span class="px-2 py-0.5 bg-red-100 text-red-600 rounded text-xs font-medium">Paused</span>
+    <button onclick="schedulerAction('resume')" class="px-2 py-1 text-xs bg-green-100 text-green-700 hover:bg-green-200 rounded">Resume</button>
+    {% endif %}
+  </div>
+</div>
 
 <!-- Stats cards -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -46,6 +58,9 @@
             {% elif item.status == 'ended_sold' %}bg-blue-100 text-blue-700
             {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.status }}</span>
           <span class="ml-2">&yen;{{ "{:,}".format(item.current_price) }}</span>
+          {% if item.amazon_sku %}
+          <span class="ml-2 text-purple-600">Amazon: &yen;{{ "{:,}".format(item.amazon_price or 0) }}</span>
+          {% endif %}
         </div>
       </div>
     </a>
@@ -56,4 +71,11 @@
     {% endfor %}
   </div>
 </div>
+
+<script>
+async function schedulerAction(action) {
+  await fetch('/api/scheduler/' + action, {method: 'POST'});
+  window.location.reload();
+}
+</script>
 {% endblock %}
