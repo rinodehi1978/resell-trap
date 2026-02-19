@@ -1,0 +1,107 @@
+{% if error %}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">{{ error }}</div>
+{% elif not deals %}
+<div class="bg-white rounded-lg shadow-sm border p-8 text-center text-sm text-gray-500">
+  No profitable deals found for this search. Try different keywords.
+</div>
+{% else %}
+<div class="mb-3 flex items-center justify-between">
+  <p class="text-sm text-gray-600">
+    Found <span class="font-semibold">{{ deals|length }}</span> potential deal(s)
+    {% if tokens_left is not none %}<span class="text-xs text-gray-400 ml-2">(Keepa tokens remaining: {{ tokens_left }})</span>{% endif %}
+  </p>
+  <div class="flex gap-2 text-xs text-gray-500">
+    <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded">Profitable</span>
+    <span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">Marginal</span>
+  </div>
+</div>
+
+<div class="space-y-3 fade-in">
+  {% for deal in deals %}
+  <div class="bg-white rounded-lg shadow-sm border p-4
+    {% if deal.estimated_profit > 1000 %}border-l-4 border-l-green-500
+    {% elif deal.estimated_profit > 0 %}border-l-4 border-l-yellow-500
+    {% else %}border-l-4 border-l-red-300{% endif %}">
+
+    <div class="flex gap-4">
+      {% if deal.yahoo_image_url %}
+      <img src="{{ deal.yahoo_image_url }}" alt="" class="w-16 h-16 object-cover rounded flex-shrink-0">
+      {% else %}
+      <div class="w-16 h-16 bg-gray-200 rounded flex-shrink-0"></div>
+      {% endif %}
+
+      <div class="flex-1 min-w-0">
+        <!-- Yahoo side -->
+        <div class="text-sm font-medium text-gray-900 truncate">{{ deal.yahoo_title }}</div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs">
+          <span class="text-gray-500">Yahoo: <span class="font-semibold text-gray-900">&yen;{{ "{:,}".format(deal.yahoo_price) }}</span></span>
+          <span class="text-gray-400">&rarr;</span>
+          <span class="text-gray-500">Amazon Used: <span class="font-semibold text-purple-700">{{ "&yen;{:,}".format(deal.amazon_used_price) if deal.amazon_used_price else "-" }}</span></span>
+          {% if deal.amazon_new_price %}
+          <span class="text-gray-500">New: <span class="font-semibold">&yen;{{ "{:,}".format(deal.amazon_new_price) }}</span></span>
+          {% endif %}
+        </div>
+
+        <!-- Amazon match -->
+        <div class="text-xs text-gray-400 mt-1 truncate">
+          Amazon: {{ deal.amazon_title }} <span class="font-mono">({{ deal.amazon_asin }})</span>
+        </div>
+
+        <!-- Stats row -->
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+          <span class="font-semibold
+            {% if deal.estimated_profit > 1000 %}text-green-700
+            {% elif deal.estimated_profit > 0 %}text-yellow-700
+            {% else %}text-red-600{% endif %}">
+            Profit: &yen;{{ "{:,}".format(deal.estimated_profit) }} ({{ deal.profit_margin_pct }}%)
+          </span>
+          <span>Sell at: <span class="font-semibold">&yen;{{ "{:,}".format(deal.recommended_sell_price) }}</span></span>
+          {% if deal.sales_rank %}
+          <span>Rank: {{ "{:,}".format(deal.sales_rank) }}
+            {% if deal.sells_well %}<span class="text-green-600">&#9733;</span>{% endif %}
+          </span>
+          {% endif %}
+          <span>
+            {% if deal.rank_trend == 'improving' %}&#9650;
+            {% elif deal.rank_trend == 'declining' %}&#9660;
+            {% else %}&#9654;{% endif %}
+            {{ deal.rank_trend }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Action -->
+      <div class="flex flex-col items-end gap-1 flex-shrink-0">
+        <button onclick="quickAdd('{{ deal.yahoo_auction_id }}')" class="px-2 py-1 text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 rounded whitespace-nowrap">
+          + Monitor
+        </button>
+        <a href="{{ deal.yahoo_url }}" target="_blank" class="text-xs text-gray-400 hover:text-gray-600">Yahoo &rarr;</a>
+        <a href="https://amazon.co.jp/dp/{{ deal.amazon_asin }}" target="_blank" class="text-xs text-gray-400 hover:text-gray-600">Amazon &rarr;</a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+async function quickAdd(auctionId) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Adding...';
+  try {
+    const resp = await fetch('/api/items', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({auction_id: auctionId}),
+    });
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    btn.textContent = 'Added';
+    btn.classList.remove('bg-blue-100', 'text-blue-700');
+    btn.classList.add('bg-green-100', 'text-green-700');
+  } catch (e) {
+    btn.textContent = e.message.includes('already') ? 'Already added' : 'Error';
+    btn.classList.remove('bg-blue-100', 'text-blue-700');
+    btn.classList.add('bg-red-100', 'text-red-700');
+  }
+}
+</script>

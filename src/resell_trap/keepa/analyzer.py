@@ -314,3 +314,93 @@ def analyze_product(
         used_price=used_price_analysis,
         recommendation=recommendation,
     )
+
+
+# --- Deal scoring ---
+
+
+@dataclass
+class DealCandidate:
+    """A potential arbitrage deal: Yahoo item matched with Amazon product."""
+    yahoo_title: str
+    yahoo_price: int
+    yahoo_auction_id: str
+    yahoo_url: str
+    yahoo_image_url: str
+    amazon_asin: str
+    amazon_title: str
+    amazon_used_price: int | None
+    amazon_new_price: int | None
+    sales_rank: int | None
+    sells_well: bool
+    estimated_profit: int
+    profit_margin_pct: float
+    recommended_sell_price: int
+    rank_trend: str
+    price_trend: str
+
+
+def score_deal(
+    yahoo_price: int,
+    keepa_product: dict[str, Any],
+    shipping_cost: int = 800,
+    margin_pct: float = 15.0,
+    amazon_fee_pct: float = 10.0,
+    good_rank_threshold: int = DEFAULT_GOOD_RANK_THRESHOLD,
+) -> DealCandidate | None:
+    """Score a potential deal by comparing Yahoo price to Amazon market data.
+
+    Returns None if no usable price data is available from Keepa.
+    """
+    asin = keepa_product.get("asin") or ""
+    title = keepa_product.get("title") or ""
+
+    stats = keepa_product.get("stats") or {}
+    used_price = _stat_val(stats, "current", IDX_USED)
+    new_price = _stat_val(stats, "current", IDX_NEW)
+    rank = _stat_val(stats, "current", IDX_SALES_RANK)
+
+    # We need at least one sell price
+    sell_price = used_price or new_price
+    if sell_price is None or sell_price <= 0:
+        return None
+
+    # Calculate costs
+    total_cost = yahoo_price + shipping_cost
+    fee_pct = (margin_pct + amazon_fee_pct) / 100.0
+    if fee_pct >= 1.0:
+        return None
+
+    # Floor price (break-even with margin)
+    floor_price = int(math.ceil(total_cost / (1.0 - fee_pct) / 10) * 10)
+
+    # Recommended sell price: use used_price if available, else new_price
+    recommended = max(sell_price, floor_price)
+
+    # Profit = sell price - cost - fees
+    amazon_fees = int(recommended * amazon_fee_pct / 100)
+    profit = recommended - total_cost - amazon_fees
+    profit_pct = (profit / total_cost * 100) if total_cost > 0 else 0
+
+    # Trends
+    sr = analyze_sales_rank(keepa_product, good_rank_threshold)
+    up = analyze_used_price(keepa_product)
+
+    return DealCandidate(
+        yahoo_title="",  # filled by caller
+        yahoo_price=yahoo_price,
+        yahoo_auction_id="",  # filled by caller
+        yahoo_url="",
+        yahoo_image_url="",
+        amazon_asin=asin,
+        amazon_title=title,
+        amazon_used_price=used_price,
+        amazon_new_price=new_price,
+        sales_rank=rank,
+        sells_well=sr.sells_well,
+        estimated_profit=profit,
+        profit_margin_pct=round(profit_pct, 1),
+        recommended_sell_price=recommended,
+        rank_trend=sr.rank_trend,
+        price_trend=up.price_trend,
+    )

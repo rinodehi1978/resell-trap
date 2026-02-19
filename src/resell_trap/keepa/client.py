@@ -71,6 +71,52 @@ class KeepaClient:
             history=history,
         )
 
+    async def search_products(
+        self,
+        term: str,
+        stats: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search Keepa product database by keyword.
+
+        Returns up to 40 product dicts with stats.
+        Each result costs 1 token.
+        """
+        stat_days = stats or settings.keepa_default_stats_days
+        params = {
+            "key": self._api_key,
+            "domain": DOMAIN_JP,
+            "type": "product",
+            "term": term,
+            "stats": stat_days,
+        }
+
+        try:
+            resp = await self._client.get(f"{KEEPA_API_BASE}/search", params=params)
+        except httpx.HTTPError as e:
+            raise KeepaApiError(f"Keepa HTTP error: {e}") from e
+
+        if resp.status_code != 200:
+            raise KeepaApiError(
+                f"Keepa API returned {resp.status_code}: {resp.text}",
+                tokens_left=self._tokens_left,
+            )
+
+        data = resp.json()
+        self._tokens_left = data.get("tokensLeft")
+
+        if self._tokens_left is not None and self._tokens_left <= 0:
+            logger.warning("Keepa API tokens exhausted (tokensLeft=%s)", self._tokens_left)
+
+        products = data.get("products")
+        if products is None:
+            error_msg = data.get("error", "Unknown error")
+            raise KeepaApiError(
+                f"Keepa search error: {error_msg}",
+                tokens_left=self._tokens_left,
+            )
+
+        return products
+
     @property
     def tokens_left(self) -> int | None:
         """Remaining API tokens (updated after each request)."""

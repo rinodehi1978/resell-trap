@@ -115,6 +115,15 @@ def keepa_page(request: Request):
     })
 
 
+@router.get("/deals", response_class=HTMLResponse)
+def deals_page(request: Request):
+    return templates.TemplateResponse("deals.html", {
+        "request": request,
+        "active_page": "deals",
+        "query": "",
+    })
+
+
 # --- htmx partials ---
 
 
@@ -215,6 +224,112 @@ async def keepa_inline_partial(
     shipping_cost: int = 800,
 ):
     return await keepa_result_partial(request, asin, cost_price, shipping_cost)
+
+
+@router.get("/partials/deals-result", response_class=HTMLResponse)
+async def deals_result_partial(
+    request: Request,
+    q: str = Query("", min_length=1),
+    shipping_cost: int = 800,
+):
+    """Search Yahoo Auctions, match to Amazon via Keepa, calculate profit."""
+    from ..config import settings
+    from ..keepa import KeepaApiError
+    from ..keepa.analyzer import score_deal
+    from ..main import app_state
+
+    scraper = app_state.get("scraper")
+    keepa = app_state.get("keepa")
+
+    if not scraper:
+        return templates.TemplateResponse("partials/deals_result.html", {
+            "request": request, "error": "Scraper not available.", "deals": [], "tokens_left": None,
+        })
+    if not keepa:
+        return templates.TemplateResponse("partials/deals_result.html", {
+            "request": request, "error": "Keepa API is not configured.", "deals": [], "tokens_left": None,
+        })
+
+    # Step 1: Search Yahoo Auctions
+    try:
+        yahoo_results = await scraper.search(q, page=1)
+    except Exception as e:
+        return templates.TemplateResponse("partials/deals_result.html", {
+            "request": request, "error": f"Yahoo search error: {e}", "deals": [], "tokens_left": None,
+        })
+
+    if not yahoo_results:
+        return templates.TemplateResponse("partials/deals_result.html", {
+            "request": request, "error": None, "deals": [], "tokens_left": keepa.tokens_left,
+        })
+
+    # Step 2: Search Keepa for matching Amazon products
+    try:
+        keepa_products = await keepa.search_products(q, stats=settings.keepa_default_stats_days)
+    except KeepaApiError as e:
+        return templates.TemplateResponse("partials/deals_result.html", {
+            "request": request, "error": f"Keepa search error: {e}", "deals": [], "tokens_left": keepa.tokens_left,
+        })
+
+    if not keepa_products:
+        return templates.TemplateResponse("partials/deals_result.html", {
+            "request": request, "error": None, "deals": [], "tokens_left": keepa.tokens_left,
+        })
+
+    # Step 3: For each Yahoo result, find best matching Amazon product and score
+    deals = []
+    for yr in yahoo_results:
+        yahoo_price = yr.current_price if hasattr(yr, "current_price") else yr.get("current_price", 0)
+        if yahoo_price <= 0:
+            continue
+
+        yahoo_title = yr.title if hasattr(yr, "title") else yr.get("title", "")
+        yahoo_title_lower = yahoo_title.lower()
+
+        # Find best Keepa match by title similarity
+        best_deal = None
+        best_score = -1
+
+        for kp in keepa_products:
+            amazon_title = (kp.get("title") or "").lower()
+            if not amazon_title:
+                continue
+
+            # Simple word overlap scoring
+            yahoo_words = set(yahoo_title_lower.split())
+            amazon_words = set(amazon_title.split())
+            overlap = len(yahoo_words & amazon_words)
+            if overlap < 2:
+                continue
+
+            deal = score_deal(
+                yahoo_price=yahoo_price,
+                keepa_product=kp,
+                shipping_cost=shipping_cost,
+                margin_pct=settings.sp_api_default_margin_pct,
+                good_rank_threshold=settings.keepa_good_rank_threshold,
+            )
+            if deal and overlap > best_score:
+                best_score = overlap
+                deal.yahoo_title = yahoo_title
+                deal.yahoo_price = yahoo_price
+                deal.yahoo_auction_id = yr.auction_id if hasattr(yr, "auction_id") else yr.get("auction_id", "")
+                deal.yahoo_url = yr.url if hasattr(yr, "url") else yr.get("url", "")
+                deal.yahoo_image_url = yr.image_url if hasattr(yr, "image_url") else yr.get("image_url", "")
+                best_deal = deal
+
+        if best_deal:
+            deals.append(best_deal)
+
+    # Sort by profit descending
+    deals.sort(key=lambda d: d.estimated_profit, reverse=True)
+
+    return templates.TemplateResponse("partials/deals_result.html", {
+        "request": request,
+        "error": None,
+        "deals": deals,
+        "tokens_left": keepa.tokens_left,
+    })
 
 
 @router.post("/web/set-asin/{auction_id}")
