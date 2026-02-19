@@ -83,5 +83,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+if settings.api_key:
+    from .auth import ApiKeyMiddleware
+    app.add_middleware(ApiKeyMiddleware)
+
 app.include_router(api_router)
 app.include_router(web_router)

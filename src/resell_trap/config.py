@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     def keepa_enabled(self) -> bool:
         return bool(self.keepa_api_key)
 
+    # Auth
+    api_key: str = ""  # Set to enable API key auth; empty = no auth
+
     # Log
     log_level: str = "INFO"
 
