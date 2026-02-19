@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title or item.auction_id }} - Resell Trap{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <a href="/items" class="text-sm text-blue-600 hover:underline">&larr; Back to Items</a>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-4">
+  <!-- Main info -->
+  <div class="lg:col-span-2 space-y-4">
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <div class="flex gap-4">
+        {% if item.image_url %}
+        <img src="{{ item.image_url }}" alt="" class="w-24 h-24 object-cover rounded flex-shrink-0">
+        {% endif %}
+        <div class="min-w-0">
+          <h1 class="text-lg font-bold text-gray-900">{{ item.title or item.auction_id }}</h1>
+          <div class="mt-1 flex items-center gap-2 text-sm">
+            <span class="inline-block px-2 py-0.5 rounded text-xs font-medium
+              {% if item.status == 'active' %}bg-green-100 text-green-700
+              {% elif item.status == 'ended_sold' %}bg-blue-100 text-blue-700
+              {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.status }}</span>
+            <a href="{{ item.url }}" target="_blank" class="text-blue-600 hover:underline text-xs">Yahoo Auctions &rarr;</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Price info -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">Price Information</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div class="text-gray-500 text-xs">Current</div>
+          <div class="font-semibold">&yen;{{ "{:,}".format(item.current_price) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">Start</div>
+          <div>&yen;{{ "{:,}".format(item.start_price) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">Buy Now</div>
+          <div>{% if item.buy_now_price %}&yen;{{ "{:,}".format(item.buy_now_price) }}{% else %}-{% endif %}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">Bids</div>
+          <div>{{ item.bid_count }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Amazon info -->
+    {% if item.amazon_sku %}
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">Amazon Listing</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div class="text-gray-500 text-xs">SKU</div>
+          <div class="font-mono text-xs">{{ item.amazon_sku }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">ASIN</div>
+          <div class="font-mono text-xs">{{ item.amazon_asin or "-" }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">Amazon Price</div>
+          <div class="font-semibold text-purple-700">&yen;{{ "{:,}".format(item.amazon_price or 0) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">Status</div>
+          <div>{{ item.amazon_listing_status or "-" }}</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Keepa analysis -->
+    {% if item.amazon_asin %}
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-900">Keepa Analysis</h2>
+        <button hx-get="/partials/keepa-inline/{{ item.amazon_asin }}?cost_price={{ item.estimated_win_price or item.current_price }}&shipping_cost={{ item.shipping_cost }}"
+                hx-target="#keepa-inline-result" hx-indicator="#keepa-spinner"
+                class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded">
+          Analyze
+          <span id="keepa-spinner" class="htmx-indicator spinner inline-block w-3 h-3 border-2 border-gray-300 border-t-blue-600 rounded-full ml-1"></span>
+        </button>
+      </div>
+      <div id="keepa-inline-result">
+        <p class="text-xs text-gray-500">Click "Analyze" to fetch Keepa data for {{ item.amazon_asin }}</p>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- History -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">History</h2>
+      <div class="space-y-2">
+        {% for h in history %}
+        <div class="flex items-center text-xs text-gray-600 gap-2">
+          <span class="text-gray-400 w-32 flex-shrink-0">{{ h.recorded_at.strftime('%m/%d %H:%M') if h.recorded_at else '' }}</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{{ h.change_type }}</span>
+          {% if h.change_type == 'status_change' %}
+          <span>{{ h.old_status }} &rarr; {{ h.new_status }}</span>
+          {% elif h.change_type == 'price_change' %}
+          <span>&yen;{{ "{:,}".format(h.old_price or 0) }} &rarr; &yen;{{ "{:,}".format(h.new_price or 0) }}</span>
+          {% elif h.change_type == 'bid_change' %}
+          <span>{{ h.old_bid_count or 0 }} &rarr; {{ h.new_bid_count or 0 }} bids</span>
+          {% elif h.change_type == 'initial' %}
+          <span>Monitoring started</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <p class="text-xs text-gray-500">No history yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Sidebar actions -->
+  <div class="space-y-4">
+    <div class="bg-white rounded-lg shadow-sm border p-4 space-y-3">
+      <h2 class="text-sm font-semibold text-gray-900">Actions</h2>
+      <button hx-post="/api/items/{{ item.auction_id }}/refresh" hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()"
+              class="w-full px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-md text-center">
+        Refresh Data
+      </button>
+      {% if not item.amazon_sku and item.amazon_asin %}
+      <button onclick="document.getElementById('amazon-dialog').showModal()"
+              class="w-full px-3 py-2 text-sm bg-purple-100 text-purple-700 hover:bg-purple-200 rounded-md text-center">
+        Create Amazon Listing
+      </button>
+      {% endif %}
+      <button onclick="if(confirm('Delete this item?')) fetch('/api/items/{{ item.auction_id }}', {method:'DELETE'}).then(()=>window.location='/items')"
+              class="w-full px-3 py-2 text-sm bg-red-50 text-red-600 hover:bg-red-100 rounded-md text-center">
+        Delete
+      </button>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-2">Details</h2>
+      <dl class="text-xs space-y-2">
+        <div><dt class="text-gray-500">Auction ID</dt><dd class="font-mono">{{ item.auction_id }}</dd></div>
+        <div><dt class="text-gray-500">Seller</dt><dd>{{ item.seller_id or "-" }}</dd></div>
+        <div><dt class="text-gray-500">Category</dt><dd>{{ item.category_id or "-" }}</dd></div>
+        <div><dt class="text-gray-500">End Time</dt><dd>{{ item.end_time.strftime('%Y-%m-%d %H:%M') if item.end_time else "-" }}</dd></div>
+        <div><dt class="text-gray-500">Check Interval</dt><dd>{{ item.check_interval_seconds }}s</dd></div>
+        <div><dt class="text-gray-500">Monitoring</dt><dd>{{ "Active" if item.is_monitoring_active else "Paused" }}</dd></div>
+        {% if item.notes %}<div><dt class="text-gray-500">Notes</dt><dd>{{ item.notes }}</dd></div>{% endif %}
+      </dl>
+    </div>
+  </div>
+</div>
+{% endblock %}

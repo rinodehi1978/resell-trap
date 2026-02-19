@@ -1,0 +1,47 @@
+<div class="bg-white rounded-lg shadow-sm border divide-y fade-in">
+  {% for r in results %}
+  <div class="flex items-center px-4 py-3 gap-3">
+    {% if r.image_url %}
+    <img src="{{ r.image_url }}" alt="" class="w-16 h-16 object-cover rounded flex-shrink-0">
+    {% else %}
+    <div class="w-16 h-16 bg-gray-200 rounded flex-shrink-0"></div>
+    {% endif %}
+    <div class="min-w-0 flex-1">
+      <a href="{{ r.url }}" target="_blank" class="text-sm font-medium text-gray-900 hover:text-blue-600 truncate block">{{ r.title }}</a>
+      <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
+        <span class="font-semibold text-gray-900">&yen;{{ "{:,}".format(r.current_price) }}</span>
+        {% if r.buy_now_price %}<span>BuyNow: &yen;{{ "{:,}".format(r.buy_now_price) }}</span>{% endif %}
+        <span>{{ r.bid_count }} bids</span>
+        {% if r.end_time %}<span>{{ r.end_time.strftime('%m/%d %H:%M') }}</span>{% endif %}
+      </div>
+    </div>
+    <button onclick="quickAdd('{{ r.auction_id }}')" class="px-2 py-1 text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 rounded flex-shrink-0">
+      + Monitor
+    </button>
+  </div>
+  {% else %}
+  <div class="px-4 py-8 text-center text-sm text-gray-500">No results found.</div>
+  {% endfor %}
+</div>
+
+<script>
+async function quickAdd(auctionId) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Adding...';
+  try {
+    const resp = await fetch('/api/items', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({auction_id: auctionId}),
+    });
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    btn.textContent = 'Added';
+    btn.classList.remove('bg-blue-100', 'text-blue-700');
+    btn.classList.add('bg-green-100', 'text-green-700');
+  } catch (e) {
+    btn.textContent = e.message.includes('already') ? 'Already added' : 'Error';
+    btn.classList.remove('bg-blue-100', 'text-blue-700');
+    btn.classList.add('bg-red-100', 'text-red-700');
+  }
+}
+</script>

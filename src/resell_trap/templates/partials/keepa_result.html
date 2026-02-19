@@ -1,0 +1,126 @@
+<div class="space-y-4 fade-in">
+  {% if error %}
+  <div class="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">{{ error }}</div>
+  {% else %}
+  <!-- Header -->
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <h2 class="text-sm font-semibold text-gray-900">{{ analysis.title or analysis.asin }}</h2>
+    <p class="text-xs text-gray-500 font-mono mt-0.5">{{ analysis.asin }}</p>
+  </div>
+
+  <div class="grid lg:grid-cols-2 gap-4">
+    <!-- Sales Rank -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h3 class="text-sm font-semibold text-gray-900 mb-3">Sales Rank</h3>
+      {% set sr = analysis.sales_rank %}
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <div class="text-xs text-gray-500">Current Rank</div>
+          <div class="font-semibold {% if sr.sells_well %}text-green-700{% else %}text-red-600{% endif %}">
+            {{ "{:,}".format(sr.current_rank) if sr.current_rank is not none else "-" }}
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">Sells Well</div>
+          <div>
+            {% if sr.sells_well %}
+            <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">Yes</span>
+            {% else %}
+            <span class="px-2 py-0.5 bg-red-100 text-red-600 rounded text-xs font-medium">No</span>
+            {% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">30-day Avg</div>
+          <div>{{ "{:,}".format(sr.avg_rank_30d) if sr.avg_rank_30d is not none else "-" }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">90-day Avg</div>
+          <div>{{ "{:,}".format(sr.avg_rank_90d) if sr.avg_rank_90d is not none else "-" }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">Trend</div>
+          <div>
+            {% if sr.rank_trend == 'improving' %}<span class="text-green-700">&#9650; Improving</span>
+            {% elif sr.rank_trend == 'declining' %}<span class="text-red-600">&#9660; Declining</span>
+            {% elif sr.rank_trend == 'stable' %}<span class="text-gray-600">&#9654; Stable</span>
+            {% else %}<span class="text-gray-400">Unknown</span>{% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">90d Range</div>
+          <div class="text-xs">
+            {{ "{:,}".format(sr.min_rank_90d) if sr.min_rank_90d is not none else "?" }}
+            - {{ "{:,}".format(sr.max_rank_90d) if sr.max_rank_90d is not none else "?" }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Used Price -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h3 class="text-sm font-semibold text-gray-900 mb-3">Used Price</h3>
+      {% set up = analysis.used_price %}
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <div class="text-xs text-gray-500">Current Price</div>
+          <div class="font-semibold">{{ "&yen;{:,}".format(up.current_price) if up.current_price is not none else "-" }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">Trend</div>
+          <div>
+            {% if up.price_trend == 'rising' %}<span class="text-green-700">&#9650; Rising</span>
+            {% elif up.price_trend == 'falling' %}<span class="text-red-600">&#9660; Falling</span>
+            {% elif up.price_trend == 'stable' %}<span class="text-gray-600">&#9654; Stable</span>
+            {% else %}<span class="text-gray-400">Unknown</span>{% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">30-day Avg</div>
+          <div>{{ "&yen;{:,}".format(up.avg_price_30d) if up.avg_price_30d is not none else "-" }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">90-day Avg</div>
+          <div>{{ "&yen;{:,}".format(up.avg_price_90d) if up.avg_price_90d is not none else "-" }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">90d Range</div>
+          <div class="text-xs">
+            {{ "&yen;{:,}".format(up.min_price_90d) if up.min_price_90d is not none else "?" }}
+            - {{ "&yen;{:,}".format(up.max_price_90d) if up.max_price_90d is not none else "?" }}
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">Volatility</div>
+          <div>{{ "%.1f%%"|format(up.price_volatility * 100) }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recommendation -->
+  {% if analysis.recommendation %}
+  {% set rec = analysis.recommendation %}
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <h3 class="text-sm font-semibold text-gray-900 mb-3">Price Recommendation</h3>
+    <div class="flex items-start gap-6">
+      <div>
+        <div class="text-2xl font-bold text-blue-700">&yen;{{ "{:,}".format(rec.recommended_price) }}</div>
+        <div class="flex items-center gap-2 mt-1">
+          <span class="px-2 py-0.5 rounded text-xs font-medium
+            {% if rec.strategy == 'undercut' %}bg-green-100 text-green-700
+            {% elif rec.strategy == 'competitive' %}bg-blue-100 text-blue-700
+            {% elif rec.strategy == 'market_average' %}bg-yellow-100 text-yellow-700
+            {% else %}bg-gray-100 text-gray-600{% endif %}">{{ rec.strategy }}</span>
+          <span class="px-2 py-0.5 rounded text-xs font-medium
+            {% if rec.confidence == 'high' %}bg-green-100 text-green-700
+            {% elif rec.confidence == 'medium' %}bg-yellow-100 text-yellow-700
+            {% else %}bg-red-100 text-red-600{% endif %}">{{ rec.confidence }}</span>
+        </div>
+      </div>
+      <div class="flex-1 text-sm text-gray-600">{{ rec.reasoning }}</div>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>

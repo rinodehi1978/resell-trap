@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .api.router import api_router
+from .web.views import router as web_router
 from .config import settings
 from .database import run_migrations
 from .monitor.scheduler import MonitorScheduler
@@ -83,3 +84,4 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(api_router)
+app.include_router(web_router)

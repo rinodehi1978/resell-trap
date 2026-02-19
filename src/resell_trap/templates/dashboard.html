@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Resell Trap{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-bold text-gray-900 mb-4">Dashboard</h1>
+
+<!-- Stats cards -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <div class="text-2xl font-bold text-gray-900">{{ stats.total }}</div>
+    <div class="text-xs text-gray-500 mt-1">Total Items</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <div class="text-2xl font-bold text-green-600">{{ stats.active }}</div>
+    <div class="text-xs text-gray-500 mt-1">Active</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <div class="text-2xl font-bold text-blue-600">{{ stats.sold }}</div>
+    <div class="text-xs text-gray-500 mt-1">Sold</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <div class="text-2xl font-bold text-orange-600">{{ stats.amazon_listed }}</div>
+    <div class="text-xs text-gray-500 mt-1">Amazon Listed</div>
+  </div>
+</div>
+
+<!-- Recent items -->
+<div class="bg-white rounded-lg shadow-sm border">
+  <div class="px-4 py-3 border-b flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-gray-900">Recent Items</h2>
+    <a href="/items" class="text-xs text-blue-600 hover:underline">View all</a>
+  </div>
+  <div class="divide-y">
+    {% for item in recent_items %}
+    <a href="/items/{{ item.auction_id }}" class="flex items-center px-4 py-3 hover:bg-gray-50">
+      {% if item.image_url %}
+      <img src="{{ item.image_url }}" alt="" class="w-12 h-12 object-cover rounded mr-3 flex-shrink-0">
+      {% else %}
+      <div class="w-12 h-12 bg-gray-200 rounded mr-3 flex-shrink-0"></div>
+      {% endif %}
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium text-gray-900 truncate">{{ item.title or item.auction_id }}</div>
+        <div class="text-xs text-gray-500 mt-0.5">
+          <span class="inline-block px-1.5 py-0.5 rounded text-xs font-medium
+            {% if item.status == 'active' %}bg-green-100 text-green-700
+            {% elif item.status == 'ended_sold' %}bg-blue-100 text-blue-700
+            {% else %}bg-gray-100 text-gray-600{% endif %}">{{ item.status }}</span>
+          <span class="ml-2">&yen;{{ "{:,}".format(item.current_price) }}</span>
+        </div>
+      </div>
+    </a>
+    {% else %}
+    <div class="px-4 py-8 text-center text-sm text-gray-500">
+      No items yet. <a href="/search" class="text-blue-600 hover:underline">Search Yahoo Auctions</a> to get started.
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

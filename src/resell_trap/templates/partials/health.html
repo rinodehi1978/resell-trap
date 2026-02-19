@@ -1,0 +1,4 @@
+<div class="flex items-center space-x-2">
+  <span class="w-2 h-2 rounded-full {% if health.scheduler_running %}bg-green-400{% else %}bg-red-400{% endif %}"></span>
+  <span class="text-xs text-gray-400">{{ health.monitored_count }} items / {{ health.active_count }} active</span>
+</div>
