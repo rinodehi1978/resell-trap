@@ -38,6 +38,18 @@ async def lifespan(app: FastAPI):
     if settings.webhook_url:
         notifiers.append(WebhookNotifier())
 
+    # Amazon SP-API (graceful degradation)
+    if settings.sp_api_enabled:
+        from .amazon.client import SpApiClient
+        from .amazon.notifier import AmazonNotifier
+
+        sp_client = SpApiClient()
+        app_state["sp_api"] = sp_client
+        notifiers.append(AmazonNotifier(sp_client, settings.sp_api_seller_id))
+        logger.info("Amazon SP-API integration enabled")
+    else:
+        logger.info("Amazon SP-API not configured — skipping")
+
     scheduler = MonitorScheduler(scraper, notifiers)
     scheduler.start()
     app_state["scheduler"] = scheduler

@@ -43,6 +43,15 @@ class ItemResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     notes: str
+    # Amazon integration
+    amazon_asin: str | None = None
+    amazon_sku: str | None = None
+    amazon_listing_status: str | None = None
+    amazon_price: int | None = None
+    estimated_win_price: int = 0
+    shipping_cost: int = 0
+    amazon_margin_pct: float = 15.0
+    amazon_last_synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -146,3 +155,47 @@ class HealthResponse(BaseModel):
 
 class SchedulerAction(BaseModel):
     action: str  # pause / resume
+
+
+# --- Amazon ---
+
+class AmazonListingCreate(BaseModel):
+    auction_id: str
+    asin: str | None = None
+    sku: str | None = None
+    estimated_win_price: int = 0
+    shipping_cost: int = 0
+    margin_pct: float | None = None
+
+
+class AmazonListingUpdate(BaseModel):
+    estimated_win_price: int | None = None
+    shipping_cost: int | None = None
+    margin_pct: float | None = None
+    amazon_price: int | None = None
+
+
+class AmazonListingResponse(BaseModel):
+    auction_id: str
+    amazon_asin: str | None
+    amazon_sku: str | None
+    amazon_listing_status: str | None
+    amazon_price: int | None
+    estimated_win_price: int
+    shipping_cost: int
+    amazon_margin_pct: float
+    amazon_last_synced_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class CatalogSearchResult(BaseModel):
+    asin: str
+    title: str = ""
+    image_url: str = ""
+    brand: str = ""
+
+
+class CatalogSearchResponse(BaseModel):
+    keywords: str
+    items: list[CatalogSearchResult]

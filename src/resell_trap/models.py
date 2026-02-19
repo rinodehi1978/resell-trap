@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -40,6 +40,16 @@ class MonitoredItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
     notes: Mapped[str] = mapped_column(Text, default="")
+
+    # Amazon integration
+    amazon_asin: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    amazon_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amazon_listing_status: Mapped[str | None] = mapped_column(Text, nullable=True)  # active / inactive / error
+    amazon_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_win_price: Mapped[int] = mapped_column(Integer, default=0)
+    shipping_cost: Mapped[int] = mapped_column(Integer, default=0)
+    amazon_margin_pct: Mapped[float] = mapped_column(Float, default=15.0)
+    amazon_last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     history: Mapped[list["StatusHistory"]] = relationship(back_populates="item", cascade="all, delete-orphan")
     notifications: Mapped[list["NotificationLog"]] = relationship(back_populates="item", cascade="all, delete-orphan")

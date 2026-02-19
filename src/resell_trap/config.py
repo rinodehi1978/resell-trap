@@ -21,6 +21,22 @@ class Settings(BaseSettings):
     webhook_url: str = ""
     webhook_type: str = "discord"  # discord / slack / line
 
+    # Amazon SP-API
+    sp_api_refresh_token: str = ""
+    sp_api_lwa_app_id: str = ""
+    sp_api_lwa_client_secret: str = ""
+    sp_api_aws_access_key: str = ""
+    sp_api_aws_secret_key: str = ""
+    sp_api_role_arn: str = ""
+    sp_api_seller_id: str = ""
+    sp_api_marketplace: str = "A1VC38T7YXB528"  # Japan
+    sp_api_default_margin_pct: float = 15.0
+    sp_api_default_shipping_cost: int = 800
+
+    @property
+    def sp_api_enabled(self) -> bool:
+        return bool(self.sp_api_refresh_token and self.sp_api_lwa_app_id)
+
     # Log
     log_level: str = "INFO"
 
