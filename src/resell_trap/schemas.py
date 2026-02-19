@@ -199,3 +199,51 @@ class CatalogSearchResult(BaseModel):
 class CatalogSearchResponse(BaseModel):
     keywords: str
     items: list[CatalogSearchResult]
+
+
+# --- Keepa ---
+
+class SalesRankAnalysisResponse(BaseModel):
+    current_rank: int | None
+    avg_rank_30d: int | None
+    avg_rank_90d: int | None
+    min_rank_90d: int | None
+    max_rank_90d: int | None
+    rank_trend: str
+    sells_well: bool
+    rank_threshold_used: int
+
+
+class UsedPriceAnalysisResponse(BaseModel):
+    current_price: int | None
+    avg_price_30d: int | None
+    avg_price_90d: int | None
+    min_price_90d: int | None
+    max_price_90d: int | None
+    price_trend: str
+    price_volatility: float
+
+
+class PriceRecommendationResponse(BaseModel):
+    recommended_price: int
+    strategy: str
+    reasoning: str
+    confidence: str
+    market_price_avg: int | None
+    market_price_min: int | None
+
+
+class KeepaAnalysisResponse(BaseModel):
+    asin: str
+    title: str = ""
+    sales_rank: SalesRankAnalysisResponse
+    used_price: UsedPriceAnalysisResponse
+    recommendation: PriceRecommendationResponse | None = None
+
+
+class KeepaAnalysisRequest(BaseModel):
+    asin: str
+    cost_price: int = 0
+    shipping_cost: int = 0
+    margin_pct: float | None = None
+    good_rank_threshold: int | None = None

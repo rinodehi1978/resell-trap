@@ -50,6 +50,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Amazon SP-API not configured — skipping")
 
+    # Keepa API (graceful degradation)
+    if settings.keepa_enabled:
+        from .keepa.client import KeepaClient
+
+        keepa_client = KeepaClient()
+        app_state["keepa"] = keepa_client
+        logger.info("Keepa API integration enabled")
+    else:
+        logger.info("Keepa API not configured — skipping")
+
     scheduler = MonitorScheduler(scraper, notifiers)
     scheduler.start()
     app_state["scheduler"] = scheduler
@@ -60,6 +70,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     scheduler.shutdown()
     await scraper.close()
+    if "keepa" in app_state:
+        await app_state["keepa"].close()
     app_state.clear()
     logger.info("Resell Trap stopped")
 

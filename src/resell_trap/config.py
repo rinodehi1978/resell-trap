@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     def sp_api_enabled(self) -> bool:
         return bool(self.sp_api_refresh_token and self.sp_api_lwa_app_id)
 
+    # Keepa Pro API
+    keepa_api_key: str = ""
+    keepa_default_stats_days: int = 90
+    keepa_good_rank_threshold: int = 100_000
+
+    @property
+    def keepa_enabled(self) -> bool:
+        return bool(self.keepa_api_key)
+
     # Log
     log_level: str = "INFO"
 
