@@ -8,9 +8,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from resell_trap.database import Base, get_db
-from resell_trap.main import app, app_state
-from resell_trap.schemas import AuctionData
+from yafuama.database import Base, get_db
+from yafuama.main import app, app_state
+from yafuama.schemas import AuctionData
 
 
 @pytest.fixture()
@@ -71,7 +71,9 @@ class TestHealthEndpoint:
         resp = client.get("/api/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "ok"
+        assert data["status"] in ("ok", "degraded")
+        assert "services" in data
+        assert isinstance(data["services"], list)
 
 
 class TestItemsCRUD:
@@ -128,6 +130,54 @@ class TestItemsCRUD:
 
         resp = client.get("/api/items/1219987808")
         assert resp.status_code == 404
+
+
+class TestHealthServices:
+    def test_services_list(self, client):
+        resp = client.get("/api/health")
+        data = resp.json()
+        services = data["services"]
+        names = [s["name"] for s in services]
+        assert "database" in names
+        assert "scheduler" in names
+
+    def test_database_ok(self, client):
+        resp = client.get("/api/health")
+        services = {s["name"]: s for s in resp.json()["services"]}
+        assert services["database"]["status"] == "ok"
+
+
+class TestPagination:
+    def test_items_pagination(self, client, mock_scraper):
+        mock_scraper.fetch_auction = AsyncMock(return_value=MOCK_AUCTION)
+        client.post("/api/items", json={"auction_id": "1219987808"})
+        # limit=1, offset=0
+        resp = client.get("/api/items?limit=1&offset=0")
+        data = resp.json()
+        assert len(data["items"]) == 1
+        assert data["total"] == 1
+        # offset past all items
+        resp = client.get("/api/items?limit=10&offset=10")
+        data = resp.json()
+        assert len(data["items"]) == 0
+        assert data["total"] == 1
+
+    def test_keywords_pagination(self, client):
+        # Create some keywords
+        client.post("/api/keywords", json={"keyword": "test1"})
+        client.post("/api/keywords", json={"keyword": "test2"})
+        resp = client.get("/api/keywords?limit=1&offset=0")
+        data = resp.json()
+        assert len(data["keywords"]) == 1
+        assert data["total"] == 2
+
+
+class TestSearchErrorHandling:
+    def test_search_scraper_error(self, client, mock_scraper):
+        mock_scraper.search = AsyncMock(side_effect=Exception("connection timeout"))
+        resp = client.get("/api/search?q=test")
+        assert resp.status_code == 502
+        assert "Yahoo search failed" in resp.json()["detail"]
 
 
 class TestHistoryEndpoint:

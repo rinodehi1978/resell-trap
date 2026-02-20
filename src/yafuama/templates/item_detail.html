@@ -1,0 +1,462 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title or item.auction_id }} - ヤフアマ{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <a href="/items" class="text-sm text-blue-600 hover:underline">&larr; 出品モニタリングに戻る</a>
+</div>
+
+{% set status_labels = {"active": "出品中", "ended_sold": "売却済", "ended_no_winner": "終了"} %}
+{% set cond_labels = {"used_like_new": "ほぼ新品", "used_very_good": "非常に良い", "used_good": "良い", "used_acceptable": "可"} %}
+{% set pattern_labels = {"1_2_days": "1〜2日で発送", "2_3_days": "2〜3日で発送", "3_7_days": "3〜7日で発送"} %}
+
+<div class="grid lg:grid-cols-3 gap-4">
+  <!-- Main info -->
+  <div class="lg:col-span-2 space-y-4">
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <div class="flex gap-4">
+        {% if item.image_url %}
+        <img src="{{ item.image_url }}" alt="" class="w-24 h-24 object-cover rounded flex-shrink-0">
+        {% endif %}
+        <div class="min-w-0">
+          <h1 class="text-lg font-bold text-gray-900">{{ item.title or item.auction_id }}</h1>
+          <div class="mt-1 flex items-center gap-2 text-sm">
+            <span class="inline-block px-2 py-0.5 rounded text-xs font-medium
+              {% if item.status == 'active' %}bg-green-100 text-green-700
+              {% elif item.status == 'ended_sold' %}bg-blue-100 text-blue-700
+              {% else %}bg-gray-100 text-gray-600{% endif %}">{{ status_labels.get(item.status, item.status) }}</span>
+            <a href="{{ item.url }}" target="_blank" class="text-blue-600 hover:underline text-xs">ヤフオクページ &rarr;</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Price info -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">価格情報</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div class="text-gray-500 text-xs">現在価格</div>
+          <div class="font-semibold">&yen;{{ "{:,}".format(item.current_price) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">開始価格</div>
+          <div>&yen;{{ "{:,}".format(item.start_price) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">即決価格</div>
+          <div>{% if item.buy_now_price %}&yen;{{ "{:,}".format(item.buy_now_price) }}{% else %}-{% endif %}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">入札数</div>
+          <div>{{ item.bid_count }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Amazon info -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">Amazon出品情報</h2>
+
+      {% if item.amazon_asin %}
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm mb-3">
+        <div>
+          <div class="text-gray-500 text-xs">ASIN</div>
+          <div class="font-mono text-xs">{{ item.amazon_asin }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">SKU</div>
+          <div class="font-mono text-xs">{{ item.amazon_sku or "-" }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">Amazon価格</div>
+          <div class="font-semibold text-purple-700">
+            {% if item.amazon_price %}&yen;{{ "{:,}".format(item.amazon_price) }}{% else %}-{% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">コンディション</div>
+          <div class="text-xs">
+            {{ cond_labels.get(item.amazon_condition, item.amazon_condition) }}
+          </div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">出品ステータス</div>
+          <div>
+            {% if item.amazon_listing_status == 'active' %}
+            <span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">出品中</span>
+            {% elif item.amazon_listing_status %}
+            <span class="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{{ item.amazon_listing_status }}</span>
+            {% else %}-{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div class="text-gray-500 text-xs">仕入れ見込み</div>
+          <div>&yen;{{ "{:,}".format(item.estimated_win_price) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">送料</div>
+          <div>&yen;{{ "{:,}".format(item.shipping_cost) }}</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">利益率</div>
+          <div>{{ item.amazon_margin_pct }}%</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">リードタイム</div>
+          <div>{{ item.amazon_lead_time_days }}日</div>
+        </div>
+        <div>
+          <div class="text-gray-500 text-xs">配送パターン</div>
+          <div class="text-xs">{{ pattern_labels.get(item.amazon_shipping_pattern, "-") }}</div>
+        </div>
+      </div>
+
+      {% else %}
+      <!-- 出品フォーム -->
+      <div x-data="listingForm()" class="space-y-4">
+        <!-- Step 1: 入力フォーム -->
+        <div x-show="step === 'form'">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">ASIN</label>
+              <input type="text" x-model="asin" placeholder="B08XXXXX"
+                     class="w-full px-2 py-1.5 border rounded text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">コンディション</label>
+              <select x-model="condition" class="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="used_like_new">ほぼ新品</option>
+                <option value="used_very_good">非常に良い</option>
+                <option value="used_good">良い</option>
+                <option value="used_acceptable">可</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">仕入れ見込み (円)</label>
+              <input type="number" x-model.number="estimatedPrice"
+                     class="w-full px-2 py-1.5 border rounded text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">送料 (円)</label>
+              <input type="number" x-model.number="shippingCost"
+                     class="w-full px-2 py-1.5 border rounded text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">利益率 (%)</label>
+              <input type="number" x-model.number="marginPct" step="0.1"
+                     class="w-full px-2 py-1.5 border rounded text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-blue-700 mb-1">ヤフオク発送日数</label>
+              <select x-model="shippingPattern"
+                      class="w-full px-2 py-1.5 border-2 border-blue-300 rounded text-sm bg-blue-50">
+                <option value="1_2_days">1〜2日で発送</option>
+                <option value="2_3_days">2〜3日で発送</option>
+                <option value="3_7_days">3〜7日で発送</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 配送パターン詳細表示 -->
+          <div class="mt-3 p-3 bg-gray-50 rounded-md">
+            <div class="text-xs font-medium text-gray-700 mb-2">
+              配送設定: リードタイム <span x-text="leadTimeMap[shippingPattern]" class="font-bold text-blue-700"></span>日
+            </div>
+            <table class="w-full text-xs text-gray-600">
+              <thead><tr class="text-left"><th class="pb-1">地域</th><th class="pb-1">配送日数</th></tr></thead>
+              <tbody>
+                <tr><td>関東（千葉・東京・神奈川・埼玉 他）</td><td>1〜2日</td></tr>
+                <tr><td>本州その他（東北・中部・関西・中国）</td><td>1〜2日</td></tr>
+                <tr><td>四国</td><td>1〜2日</td></tr>
+                <tr><td>九州</td><td>2〜3日</td></tr>
+                <tr><td>北海道</td><td>2〜3日</td></tr>
+                <tr><td>沖縄・離島</td><td>3〜4日</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <button @click="showConfirmation()" class="w-full mt-3 px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700">
+            出品内容を確認
+          </button>
+          <div x-show="error" class="text-xs text-red-600 mt-1" x-text="error"></div>
+        </div>
+
+        <!-- Step 2: 確認画面 -->
+        <div x-show="step === 'confirm'" class="space-y-3">
+          <h3 class="text-sm font-semibold text-gray-900">出品確認</h3>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div>ASIN: <span class="font-mono" x-text="asin"></span></div>
+            <div>コンディション: <span x-text="conditionLabel()"></span></div>
+            <div>仕入れ見込み: &yen;<span x-text="estimatedPrice.toLocaleString()"></span></div>
+            <div>送料: &yen;<span x-text="shippingCost.toLocaleString()"></span></div>
+            <div>利益率: <span x-text="marginPct"></span>%</div>
+            <div class="font-bold text-blue-700">発送: <span x-text="patternLabel()"></span></div>
+            <div>リードタイム: <span x-text="leadTimeMap[shippingPattern]"></span>日</div>
+            <div>配送テンプレート: 自動設定</div>
+          </div>
+          <div class="flex gap-2">
+            <button @click="step = 'form'" class="flex-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-md">
+              戻る
+            </button>
+            <button @click="createListing()" :disabled="loading"
+                    class="flex-1 px-3 py-2 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700">
+              <span x-show="!loading">Amazon出品する</span>
+              <span x-show="loading">出品中...</span>
+            </button>
+          </div>
+          <div x-show="error" class="text-xs text-red-600" x-text="error"></div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Keepa analysis -->
+    {% if item.amazon_asin %}
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-900">Keepa分析</h2>
+        <button hx-get="/partials/keepa-inline/{{ item.amazon_asin }}?cost_price={{ item.estimated_win_price or item.current_price }}&shipping_cost={{ item.shipping_cost }}"
+                hx-target="#keepa-inline-result" hx-indicator="#keepa-spinner"
+                class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded">
+          分析する
+          <span id="keepa-spinner" class="htmx-indicator spinner inline-block w-3 h-3 border-2 border-gray-300 border-t-blue-600 rounded-full ml-1"></span>
+        </button>
+      </div>
+      <div id="keepa-inline-result">
+        <p class="text-xs text-gray-500">「分析する」をクリックして {{ item.amazon_asin }} のKeepaデータを取得します</p>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Tabs: History / Notifications -->
+    <div class="bg-white rounded-lg shadow-sm border" x-data="{ tab: 'history' }">
+      <div class="flex border-b">
+        <button @click="tab = 'history'" :class="tab === 'history' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'"
+                class="px-4 py-2 text-sm font-medium">履歴</button>
+        <button @click="tab = 'notifications'" :class="tab === 'notifications' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'"
+                class="px-4 py-2 text-sm font-medium">通知ログ</button>
+      </div>
+
+      <!-- History tab -->
+      <div x-show="tab === 'history'" class="p-4">
+        {% set change_labels = {"status_change": "ステータス変更", "price_change": "価格変更", "bid_change": "入札変更", "initial": "監視開始"} %}
+        <div class="space-y-2">
+          {% for h in history %}
+          <div class="flex items-center text-xs text-gray-600 gap-2">
+            <span class="text-gray-400 w-32 flex-shrink-0">{{ h.recorded_at.strftime('%m/%d %H:%M') if h.recorded_at else '' }}</span>
+            <span class="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{{ change_labels.get(h.change_type, h.change_type) }}</span>
+            {% if h.change_type == 'status_change' %}
+            <span>{{ h.old_status }} &rarr; {{ h.new_status }}</span>
+            {% elif h.change_type == 'price_change' %}
+            <span>&yen;{{ "{:,}".format(h.old_price or 0) }} &rarr; &yen;{{ "{:,}".format(h.new_price or 0) }}</span>
+            {% elif h.change_type == 'bid_change' %}
+            <span>{{ h.old_bid_count or 0 }} &rarr; {{ h.new_bid_count or 0 }}件</span>
+            {% elif h.change_type == 'initial' %}
+            <span>監視を開始しました</span>
+            {% endif %}
+          </div>
+          {% else %}
+          <p class="text-xs text-gray-500">履歴はまだありません。</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Notifications tab -->
+      <div x-show="tab === 'notifications'" x-cloak class="p-4">
+        <div class="space-y-2">
+          {% for n in notifications %}
+          <div class="flex items-center text-xs text-gray-600 gap-2">
+            <span class="text-gray-400 w-32 flex-shrink-0">{{ n.sent_at.strftime('%m/%d %H:%M') if n.sent_at else '' }}</span>
+            <span class="px-1.5 py-0.5 rounded font-medium
+              {% if n.success %}bg-green-100 text-green-700{% else %}bg-red-100 text-red-600{% endif %}">
+              {{ n.channel }}
+            </span>
+            <span class="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{{ n.event_type }}</span>
+            <span class="truncate">{{ n.message }}</span>
+          </div>
+          {% else %}
+          <p class="text-xs text-gray-500">通知履歴はまだありません。</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sidebar actions -->
+  <div class="space-y-4">
+    <div class="bg-white rounded-lg shadow-sm border p-4 space-y-3">
+      <h2 class="text-sm font-semibold text-gray-900">操作</h2>
+      <button hx-post="/api/items/{{ item.auction_id }}/refresh" hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()"
+              class="w-full px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-md text-center">
+        データを更新
+      </button>
+      <button onclick="toggleMonitoring()" id="monitor-toggle-btn"
+              class="w-full px-3 py-2 text-sm rounded-md text-center
+                {% if item.is_monitoring_active %}bg-yellow-50 text-yellow-700 hover:bg-yellow-100{% else %}bg-green-50 text-green-700 hover:bg-green-100{% endif %}">
+        {{ "監視を一時停止" if item.is_monitoring_active else "監視を再開" }}
+      </button>
+      <button onclick="deleteItem()" id="delete-item-btn"
+              class="w-full px-3 py-2 text-sm bg-red-50 text-red-600 hover:bg-red-100 rounded-md text-center">
+        {% if item.amazon_sku %}Amazon出品取り下げ + 削除{% else %}削除{% endif %}
+      </button>
+      <div id="delete-item-msg" class="text-xs mt-1"></div>
+    </div>
+
+    <!-- Item settings -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-2">設定</h2>
+      <form onsubmit="updateSettings(event)" class="space-y-2">
+        <div>
+          <label class="block text-xs text-gray-500 mb-0.5">チェック間隔（秒）</label>
+          <input type="number" id="set-interval" value="{{ item.check_interval_seconds }}" min="30"
+                 class="w-full px-2 py-1 border rounded text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-0.5">メモ</label>
+          <input type="text" id="set-notes" value="{{ item.notes }}"
+                 class="w-full px-2 py-1 border rounded text-sm">
+        </div>
+        <button type="submit" class="w-full px-2 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded">
+          設定を保存
+        </button>
+        <div id="settings-msg" class="text-xs"></div>
+      </form>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-2">詳細情報</h2>
+      <dl class="text-xs space-y-2">
+        <div><dt class="text-gray-500">オークションID</dt><dd class="font-mono">{{ item.auction_id }}</dd></div>
+        <div><dt class="text-gray-500">出品者</dt><dd>{{ item.seller_id or "-" }}</dd></div>
+        <div><dt class="text-gray-500">カテゴリ</dt><dd>{{ item.category_id or "-" }}</dd></div>
+        <div><dt class="text-gray-500">終了日時</dt><dd>{{ item.end_time.strftime('%Y-%m-%d %H:%M') if item.end_time else "-" }}</dd></div>
+        <div><dt class="text-gray-500">最終チェック</dt><dd>{{ item.last_checked_at.strftime('%m/%d %H:%M') if item.last_checked_at else "-" }}</dd></div>
+        <div><dt class="text-gray-500">登録日</dt><dd>{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else "-" }}</dd></div>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<script>
+const auctionId = '{{ item.auction_id }}';
+
+function listingForm() {
+  return {
+    step: 'form',
+    asin: '{{ item.amazon_asin or "" }}',
+    condition: 'used_very_good',
+    estimatedPrice: {{ item.current_price or 0 }},
+    shippingCost: 800,
+    marginPct: 15.0,
+    shippingPattern: '2_3_days',
+    loading: false,
+    error: '',
+    leadTimeMap: { '1_2_days': 4, '2_3_days': 6, '3_7_days': 9 },
+    conditionLabel() {
+      const m = { used_like_new: 'ほぼ新品', used_very_good: '非常に良い', used_good: '良い', used_acceptable: '可' };
+      return m[this.condition] || this.condition;
+    },
+    patternLabel() {
+      const m = { '1_2_days': '1〜2日で発送', '2_3_days': '2〜3日で発送', '3_7_days': '3〜7日で発送' };
+      return m[this.shippingPattern] || '';
+    },
+    showConfirmation() {
+      if (!this.asin) { this.error = 'ASINを入力してください'; return; }
+      this.error = '';
+      this.step = 'confirm';
+    },
+    async createListing() {
+      this.loading = true;
+      this.error = '';
+      try {
+        const resp = await fetch('/api/amazon/listings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            auction_id: auctionId,
+            asin: this.asin,
+            condition: this.condition,
+            estimated_win_price: this.estimatedPrice,
+            shipping_cost: this.shippingCost,
+            margin_pct: this.marginPct,
+            shipping_pattern: this.shippingPattern,
+          }),
+        });
+        if (!resp.ok) {
+          const d = await resp.json();
+          throw new Error(d.detail || '出品に失敗しました');
+        }
+        window.location.reload();
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
+    },
+  };
+}
+
+async function deleteItem() {
+  const hasAmazon = '{{ item.amazon_sku or "" }}' !== '';
+  const msg = hasAmazon
+    ? 'Amazon出品を取り下げて、この商品を削除しますか？'
+    : 'この商品と履歴をすべて削除しますか？';
+  if (!confirm(msg)) return;
+
+  const btn = document.getElementById('delete-item-btn');
+  const msgEl = document.getElementById('delete-item-msg');
+  btn.disabled = true; btn.textContent = hasAmazon ? '取り下げ中...' : '削除中...';
+  try {
+    const resp = await fetch('/api/items/' + auctionId, {method: 'DELETE'});
+    if (!resp.ok && resp.status !== 204) {
+      const d = await resp.json();
+      throw new Error(d.detail || '失敗しました');
+    }
+    window.location = '/items';
+  } catch (e) {
+    msgEl.textContent = e.message;
+    msgEl.className = 'text-xs mt-1 text-red-600';
+    btn.disabled = false;
+    btn.textContent = hasAmazon ? 'Amazon出品取り下げ + 削除' : '削除';
+  }
+}
+
+async function toggleMonitoring() {
+  const btn = document.getElementById('monitor-toggle-btn');
+  const isActive = btn.textContent.trim().startsWith('監視を一時停止');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/items/' + auctionId, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({is_monitoring_active: !isActive})
+    });
+    if (!resp.ok) throw new Error('失敗しました');
+    window.location.reload();
+  } catch(e) { btn.disabled = false; }
+}
+
+async function updateSettings(e) {
+  e.preventDefault();
+  const interval = parseInt(document.getElementById('set-interval').value);
+  const notes = document.getElementById('set-notes').value;
+  const msgEl = document.getElementById('settings-msg');
+  try {
+    const resp = await fetch('/api/items/' + auctionId, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({check_interval_seconds: interval, notes: notes})
+    });
+    if (!resp.ok) throw new Error('失敗しました');
+    msgEl.textContent = '保存しました'; msgEl.className = 'text-xs text-green-600';
+  } catch(e) {
+    msgEl.textContent = e.message; msgEl.className = 'text-xs text-red-600';
+  }
+}
+
+</script>
+{% endblock %}

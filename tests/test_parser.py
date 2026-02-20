@@ -1,6 +1,6 @@
 """Tests for AuctionPageParser and SearchResultsParser."""
 
-from resell_trap.scraper.parser import AuctionPageParser, SearchResultsParser
+from yafuama.scraper.parser import AuctionPageParser, SearchResultsParser
 
 
 class TestAuctionPageParser:

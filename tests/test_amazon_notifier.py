@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from resell_trap.amazon import AmazonApiError
-from resell_trap.amazon.notifier import AmazonNotifier
+from yafuama.amazon import AmazonApiError
+from yafuama.amazon.notifier import AmazonNotifier
 
 
 def _make_item(**kwargs):

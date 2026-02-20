@@ -1,0 +1,383 @@
+"""Watched keywords CRUD and manual scan trigger."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..matcher import is_apparel
+from ..models import DealAlert, MonitoredItem, WatchedKeyword
+from ..schemas import (
+    DealAlertListResponse,
+    WatchedKeywordCreate,
+    WatchedKeywordListResponse,
+    WatchedKeywordResponse,
+    WatchedKeywordUpdate,
+)
+
+router = APIRouter(prefix="/api/keywords", tags=["keywords"])
+
+
+def _kw_to_response(kw: WatchedKeyword, db: Session) -> dict:
+    """Convert a WatchedKeyword to response dict with alert_count."""
+    count = db.query(DealAlert).filter(DealAlert.keyword_id == kw.id).count()
+    return WatchedKeywordResponse(
+        id=kw.id,
+        keyword=kw.keyword,
+        is_active=kw.is_active,
+        last_scanned_at=kw.last_scanned_at,
+        created_at=kw.created_at,
+        updated_at=kw.updated_at,
+        notes=kw.notes,
+        alert_count=count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Keyword CRUD (no path params that could conflict)
+# ---------------------------------------------------------------------------
+
+@router.get("", response_model=WatchedKeywordListResponse)
+def list_keywords(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    q = db.query(WatchedKeyword).order_by(WatchedKeyword.created_at.desc())
+    total = q.count()
+    keywords = q.offset(offset).limit(limit).all()
+    items = [_kw_to_response(kw, db) for kw in keywords]
+    return WatchedKeywordListResponse(keywords=items, total=total)
+
+
+@router.post("", response_model=WatchedKeywordResponse, status_code=201)
+def create_keyword(body: WatchedKeywordCreate, db: Session = Depends(get_db)):
+    keyword = body.keyword.strip()
+    if not keyword:
+        raise HTTPException(400, "Keyword must not be empty")
+
+    if is_apparel(keyword):
+        raise HTTPException(400, "アパレル関連キーワードは登録できません")
+
+    existing = db.query(WatchedKeyword).filter(WatchedKeyword.keyword == keyword).first()
+    if existing:
+        raise HTTPException(409, f"Keyword '{keyword}' already exists")
+
+    kw = WatchedKeyword(keyword=keyword, is_active=body.is_active, notes=body.notes)
+    db.add(kw)
+    db.commit()
+    db.refresh(kw)
+    return _kw_to_response(kw, db)
+
+
+# ---------------------------------------------------------------------------
+# Alert routes — MUST be registered BEFORE /{keyword_id} routes
+# to prevent "alerts" from being parsed as keyword_id int param.
+# ---------------------------------------------------------------------------
+
+VALID_REJECTION_REASONS = (
+    "wrong_product",   # 商品違い
+    "accessory",       # 部品/アクセサリー
+    "model_variant",   # モデル/バリアント違い
+    "bad_price",       # 価格おかしい
+    "other",           # その他
+)
+
+
+@router.get("/alerts/{alert_id}/images")
+async def get_alert_images(alert_id: int, db: Session = Depends(get_db)):
+    """Fetch all product images from the Yahoo auction page for this alert."""
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+
+    from ..main import app_state
+
+    scraper = app_state.get("scraper")
+    if not scraper:
+        raise HTTPException(503, "Scraper not available")
+
+    images = await scraper.fetch_auction_images(alert.yahoo_auction_id)
+    return {"images": images, "auction_id": alert.yahoo_auction_id}
+
+
+@router.get("/alerts/{alert_id}/suggest-rejection")
+def suggest_rejection_reasons(alert_id: int, db: Session = Depends(get_db)):
+    """Analyze an alert's titles and suggest specific rejection reasons."""
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+
+    from ..ai.rejection_analyzer import suggest_reasons
+
+    suggestions = suggest_reasons(alert, db)
+    static_reasons = [
+        {"reason": "wrong_product", "label": "商品違い"},
+        {"reason": "accessory", "label": "部品/アクセサリー"},
+        {"reason": "model_variant", "label": "モデル/バリアント違い"},
+        {"reason": "bad_price", "label": "価格おかしい"},
+        {"reason": "other", "label": "その他"},
+    ]
+    return {"suggestions": suggestions, "static_reasons": static_reasons}
+
+
+@router.post("/alerts/{alert_id}/reject", status_code=200)
+def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)):
+    """Soft-delete a deal alert with rejection reason for learning."""
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+
+    body = body or {}
+    reason = body.get("reason", "other")
+    if reason not in VALID_REJECTION_REASONS:
+        reason = "other"
+
+    alert.status = "rejected"
+    alert.rejection_reason = reason
+    alert.rejection_note = body.get("note", "")
+    alert.rejected_at = datetime.now(timezone.utc)
+
+    # Analyze rejection and persist learned patterns
+    try:
+        from ..ai.rejection_analyzer import analyze_single_rejection
+        analyze_single_rejection(alert, reason, db)
+    except Exception:
+        pass  # Non-critical: don't fail the rejection itself
+
+    db.commit()
+
+    # Reload matcher overrides with new patterns
+    try:
+        from ..matcher_overrides import overrides
+        overrides.reload()
+    except Exception:
+        pass
+
+    return {"ok": True, "id": alert_id, "reason": reason}
+
+
+@router.delete("/alerts/{alert_id}", status_code=204)
+def delete_alert(alert_id: int, db: Session = Depends(get_db)):
+    """Hard-delete a deal alert (fallback)."""
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    db.delete(alert)
+    db.commit()
+
+
+@router.post("/alerts/{alert_id}/list", status_code=201)
+async def list_from_deal(
+    alert_id: int,
+    body: dict = None,
+    db: Session = Depends(get_db),
+):
+    """Create MonitoredItem + Amazon listing from a deal alert.
+
+    Expects: {
+        "condition": "used_very_good",
+        "price": 9800,
+        "condition_note": "動作確認済み。...",
+        "image_urls": ["https://..."]
+    }
+    """
+    from ..amazon.pricing import calculate_amazon_price, generate_sku
+    from ..config import settings
+    from ..main import app_state
+    from ..schemas import VALID_CONDITIONS
+
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+
+    body = body or {}
+    condition = body.get("condition", "used_very_good")
+    if condition not in VALID_CONDITIONS:
+        raise HTTPException(400, f"Invalid condition: {condition}")
+
+    # Check if MonitoredItem already exists
+    existing = db.query(MonitoredItem).filter(
+        MonitoredItem.auction_id == alert.yahoo_auction_id
+    ).first()
+    if existing and existing.amazon_sku:
+        raise HTTPException(409, "この商品は既にAmazonに出品済みです")
+
+    # Create or reuse MonitoredItem
+    if existing:
+        item = existing
+    else:
+        item = MonitoredItem(
+            auction_id=alert.yahoo_auction_id,
+            title=alert.yahoo_title,
+            url=alert.yahoo_url or f"https://auctions.yahoo.co.jp/jp/auction/{alert.yahoo_auction_id}",
+            image_url=alert.yahoo_image_url or "",
+            current_price=alert.yahoo_price,
+            buy_now_price=alert.yahoo_price,
+        )
+        db.add(item)
+        db.flush()  # Get item.id
+
+    # Calculate price
+    yahoo_shipping = getattr(alert, "yahoo_shipping", 0) or 0
+    estimated_price = alert.yahoo_price
+    shipping = yahoo_shipping or settings.sp_api_default_shipping_cost
+    margin = settings.sp_api_default_margin_pct
+    amazon_price = body.get("price") or calculate_amazon_price(
+        estimated_price, shipping, margin_pct=margin
+    )
+
+    # Create Amazon listing via SP-API
+    sp_client = app_state.get("sp_api")
+    if not sp_client:
+        raise HTTPException(503, "Amazon SP-APIが未設定です")
+
+    sku = generate_sku(alert.yahoo_auction_id)
+
+    try:
+        from ..amazon import AmazonApiError
+
+        # Check restrictions
+        raw_restrictions = await sp_client.get_listing_restrictions(
+            alert.amazon_asin, condition_type=condition
+        )
+        blocked = [r for r in raw_restrictions if r.get("reasons")]
+        if blocked:
+            reasons = "; ".join(
+                reason.get("message", reason.get("reasonCode", ""))
+                for r in blocked for reason in r.get("reasons", [])
+            ) or "ブランド承認またはカテゴリ承認が必要です"
+            raise HTTPException(403, f"出品制限: {reasons}")
+
+        attributes = {
+            "condition_type": [{"value": condition}],
+            "purchasable_offer": [{
+                "marketplace_id": settings.sp_api_marketplace,
+                "currency": "JPY",
+                "our_price": [{"schedule": [{"value_with_tax": amazon_price}]}],
+            }],
+            "fulfillment_availability": [
+                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
+            ],
+            "lead_time_to_ship_max_days": [{"value": 4}],
+        }
+
+        # Condition note (product description)
+        condition_note = body.get("condition_note", "").strip()
+        if condition_note:
+            attributes["condition_note"] = [
+                {"value": condition_note, "language_tag": "ja_JP"}
+            ]
+
+        # Product images from Yahoo auction
+        image_urls = body.get("image_urls", [])
+        if image_urls:
+            attributes["main_product_images"] = [
+                {"media_location": image_urls[0]}
+            ]
+            if len(image_urls) > 1:
+                attributes["other_product_images"] = [
+                    {"media_location": url} for url in image_urls[1:9]
+                ]
+
+        await sp_client.create_listing(
+            settings.sp_api_seller_id, sku, "PRODUCT", attributes
+        )
+    except AmazonApiError as e:
+        raise HTTPException(502, f"SP-API error: {e}") from e
+
+    # Update MonitoredItem with Amazon info
+    item.amazon_asin = alert.amazon_asin
+    item.amazon_sku = sku
+    item.amazon_condition = condition
+    item.amazon_listing_status = "active"
+    item.amazon_price = amazon_price
+    item.estimated_win_price = estimated_price
+    item.shipping_cost = shipping
+    item.amazon_margin_pct = margin
+    item.is_monitoring_active = True
+    item.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {
+        "ok": True,
+        "auction_id": alert.yahoo_auction_id,
+        "amazon_sku": sku,
+        "amazon_price": amazon_price,
+        "condition": condition,
+        "item_id": item.id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Scan routes (literal path first, then parameterized)
+# ---------------------------------------------------------------------------
+
+@router.post("/scan", status_code=200)
+async def trigger_scan():
+    """Manually trigger a scan of all active keywords."""
+    from ..main import app_state
+
+    scanner = app_state.get("deal_scanner")
+    if scanner is None:
+        raise HTTPException(503, "Deal scanner is not available (Keepa API not configured?)")
+    await scanner.scan_all()
+    return {"ok": True, "message": "Scan completed"}
+
+
+# ---------------------------------------------------------------------------
+# Keyword routes with {keyword_id} path param — MUST be last
+# ---------------------------------------------------------------------------
+
+@router.put("/{keyword_id}", response_model=WatchedKeywordResponse)
+def update_keyword(keyword_id: int, body: WatchedKeywordUpdate, db: Session = Depends(get_db)):
+    kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
+    if not kw:
+        raise HTTPException(404, f"Keyword {keyword_id} not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for key, val in update_data.items():
+        setattr(kw, key, val)
+    kw.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(kw)
+    return _kw_to_response(kw, db)
+
+
+@router.delete("/{keyword_id}", status_code=204)
+def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
+    kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
+    if not kw:
+        raise HTTPException(404, f"Keyword {keyword_id} not found")
+    db.delete(kw)
+    db.commit()
+
+
+@router.get("/{keyword_id}/alerts", response_model=DealAlertListResponse)
+def list_alerts(keyword_id: int, db: Session = Depends(get_db)):
+    kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
+    if not kw:
+        raise HTTPException(404, f"Keyword {keyword_id} not found")
+    alerts = (
+        db.query(DealAlert)
+        .filter(DealAlert.keyword_id == keyword_id)
+        .order_by(DealAlert.notified_at.desc())
+        .limit(100)
+        .all()
+    )
+    return DealAlertListResponse(alerts=alerts, total=len(alerts))
+
+
+@router.post("/{keyword_id}/scan", status_code=200)
+async def trigger_keyword_scan(keyword_id: int):
+    """Manually trigger a scan for a single keyword."""
+    from ..main import app_state
+
+    scanner = app_state.get("deal_scanner")
+    if scanner is None:
+        raise HTTPException(503, "Deal scanner is not available")
+    new_deals = await scanner.scan_keyword_by_id(keyword_id)
+    return {"ok": True, "new_deals": len(new_deals), "deals": new_deals}

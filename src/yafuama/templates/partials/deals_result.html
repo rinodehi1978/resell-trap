@@ -1,0 +1,130 @@
+{% if error %}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">{{ error }}</div>
+{% elif not deals %}
+<div class="bg-white rounded-lg shadow-sm border p-8 text-center text-sm text-gray-500">
+  {% if total_before_filter is defined and total_before_filter > 0 %}
+    {{ total_before_filter }}件見つかりましたが、粗利率{{ min_margin }}%以上・粗利¥{{ "{:,}".format(min_profit) }}以上を満たすものはありませんでした。
+  {% else %}
+    該当する商品が見つかりませんでした。別のキーワードで試してください。
+  {% endif %}
+</div>
+{% else %}
+<div class="mb-3 flex items-center justify-between">
+  <p class="text-sm text-gray-600">
+    <span class="font-semibold">{{ deals|length }}</span>件の有望な案件
+    {% if total_before_filter is defined and total_before_filter > deals|length %}
+      <span class="text-xs text-gray-400 ml-1">({{ total_before_filter }}件中、基準を満たす{{ deals|length }}件を表示)</span>
+    {% endif %}
+    {% if tokens_left is not none %}<span class="text-xs text-gray-400 ml-2">(Keepaトークン残: {{ tokens_left }})</span>{% endif %}
+  </p>
+</div>
+
+<div class="space-y-3 fade-in">
+  {% for deal in deals %}
+  <div class="bg-white rounded-lg shadow-sm border p-4
+    {% if deal.gross_margin_pct >= 50 %}border-l-4 border-l-green-500
+    {% elif deal.gross_margin_pct >= 40 %}border-l-4 border-l-emerald-400
+    {% else %}border-l-4 border-l-yellow-500{% endif %}">
+
+    <div class="flex gap-4">
+      {% if deal.yahoo_image_url %}
+      <img src="{{ deal.yahoo_image_url }}" alt="" class="w-16 h-16 object-cover rounded flex-shrink-0">
+      {% else %}
+      <div class="w-16 h-16 bg-gray-200 rounded flex-shrink-0"></div>
+      {% endif %}
+
+      <div class="flex-1 min-w-0">
+        <!-- Yahoo side -->
+        <div class="text-sm font-medium text-gray-900 truncate">{{ deal.yahoo_title }}</div>
+
+        <!-- Price comparison -->
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs">
+          <span class="text-gray-500">Yahoo:
+            <span class="font-semibold text-gray-900">&yen;{{ "{:,}".format(deal.yahoo_price) }}</span>
+            {% if deal.yahoo_shipping > 0 %}
+              <span class="text-gray-400">+送料&yen;{{ "{:,}".format(deal.yahoo_shipping) }}</span>
+            {% elif deal.yahoo_shipping == 0 %}
+              <span class="text-green-600">送料無料</span>
+            {% endif %}
+          </span>
+          <span class="text-gray-400">&rarr;</span>
+          <span class="text-gray-500">Amazon中古: <span class="font-semibold text-purple-700">{{ "&yen;{:,}".format(deal.amazon_used_price) if deal.amazon_used_price else "-" }}</span></span>
+          {% if deal.amazon_new_price %}
+          <span class="text-gray-500">新品: <span class="font-semibold">&yen;{{ "{:,}".format(deal.amazon_new_price) }}</span></span>
+          {% endif %}
+        </div>
+
+        <!-- Amazon match -->
+        <div class="text-xs text-gray-400 mt-1 truncate">
+          Amazon: {{ deal.amazon_title }} <span class="font-mono">({{ deal.amazon_asin }})</span>
+        </div>
+
+        <!-- Cost breakdown -->
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-gray-400">
+          <span>仕入: &yen;{{ "{:,}".format(deal.yahoo_price) }}</span>
+          <span>+ Yahoo送料: &yen;{{ "{:,}".format(deal.yahoo_shipping) }}</span>
+          <span>+ 転送: &yen;{{ "{:,}".format(deal.forwarding_cost) }}</span>
+          <span>+ システム: &yen;{{ "{:,}".format(deal.system_fee) }}</span>
+          <span>+ Amazon手数料: &yen;{{ "{:,}".format(deal.amazon_fee) }}</span>
+          <span class="font-semibold text-gray-600">= 総コスト: &yen;{{ "{:,}".format(deal.total_cost + deal.amazon_fee) }}</span>
+        </div>
+
+        <!-- Profit stats -->
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+          <span class="font-bold text-lg
+            {% if deal.gross_margin_pct >= 50 %}text-green-700
+            {% elif deal.gross_margin_pct >= 40 %}text-emerald-600
+            {% else %}text-yellow-700{% endif %}">
+            粗利 &yen;{{ "{:,}".format(deal.gross_profit) }}
+            <span class="text-sm">({{ deal.gross_margin_pct }}%)</span>
+          </span>
+          <span>販売価格: <span class="font-semibold">&yen;{{ "{:,}".format(deal.sell_price) }}</span></span>
+          {% if deal.sales_rank %}
+          <span>ランク: {{ "{:,}".format(deal.sales_rank) }}
+            {% if deal.sells_well %}<span class="text-green-600">&#9733;</span>{% endif %}
+          </span>
+          {% endif %}
+          <span>
+            {% if deal.rank_trend == 'improving' %}&#9650;
+            {% elif deal.rank_trend == 'declining' %}&#9660;
+            {% else %}&#9654;{% endif %}
+            {{ deal.rank_trend }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Action -->
+      <div class="flex flex-col items-end gap-1 flex-shrink-0">
+        <button onclick="quickAdd('{{ deal.yahoo_auction_id }}')" class="px-2 py-1 text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 rounded whitespace-nowrap">
+          + Monitor
+        </button>
+        <a href="{{ deal.yahoo_url }}" target="_blank" class="text-xs text-gray-400 hover:text-gray-600">Yahoo &rarr;</a>
+        <a href="https://amazon.co.jp/dp/{{ deal.amazon_asin }}" target="_blank" class="text-xs text-gray-400 hover:text-gray-600">Amazon &rarr;</a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+async function quickAdd(auctionId) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Adding...';
+  try {
+    const resp = await fetch('/api/items', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({auction_id: auctionId}),
+    });
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    btn.textContent = 'Added';
+    btn.classList.remove('bg-blue-100', 'text-blue-700');
+    btn.classList.add('bg-green-100', 'text-green-700');
+  } catch (e) {
+    btn.textContent = e.message.includes('already') ? 'Already added' : 'Error';
+    btn.classList.remove('bg-blue-100', 'text-blue-700');
+    btn.classList.add('bg-red-100', 'text-red-700');
+  }
+}
+</script>

@@ -1,0 +1,432 @@
+"""Keyword candidate generator using multiple discovery strategies."""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+
+from sqlalchemy.orm import Session
+
+from ..config import settings
+from ..matcher import extract_model_numbers_from_text, extract_product_info, is_apparel
+from ..models import DealAlert, KeywordCandidate, WatchedKeyword
+from .analyzer import KNOWN_BRANDS, KeywordInsights
+
+logger = logging.getLogger(__name__)
+
+# English ↔ Katakana mapping for synonym generation
+SYNONYM_MAP = {
+    "switch": "スイッチ",
+    "card": "カード",
+    "game": "ゲーム",
+    "controller": "コントローラー",
+    "camera": "カメラ",
+    "headphone": "ヘッドホン",
+    "speaker": "スピーカー",
+    "figure": "フィギュア",
+    "model": "モデル",
+    "watch": "ウォッチ",
+    "tablet": "タブレット",
+    "printer": "プリンター",
+    "lens": "レンズ",
+    "monitor": "モニター",
+    "keyboard": "キーボード",
+    "mouse": "マウス",
+    "router": "ルーター",
+    "drone": "ドローン",
+    "robot": "ロボット",
+}
+
+# Common abbreviation expansions
+ABBREVIATION_MAP = {
+    "ps5": "PlayStation 5",
+    "ps4": "PlayStation 4",
+    "ps3": "PlayStation 3",
+    "ps2": "PlayStation 2",
+    "3ds": "ニンテンドー3DS",
+    "ds": "ニンテンドーDS",
+    "gc": "ゲームキューブ",
+    "sfc": "スーパーファミコン",
+    "fc": "ファミコン",
+    "gb": "ゲームボーイ",
+    "gba": "ゲームボーイアドバンス",
+}
+
+# Condition / packaging variants
+CONDITION_SUFFIXES = ["中古", "ジャンク", "BOX", "セット", "本体", "限定"]
+
+
+@dataclass
+class CandidateProposal:
+    keyword: str
+    strategy: str
+    confidence: float
+    parent_keyword_id: int | None
+    reasoning: str
+
+
+def generate_all(
+    insights: KeywordInsights,
+    db: Session,
+    max_per_strategy: int = 10,
+    demand_products: list[dict] | None = None,
+) -> list[CandidateProposal]:
+    """Run all generation strategies and return deduplicated candidates."""
+    existing = _get_existing_keywords(db)
+
+    candidates: list[CandidateProposal] = []
+    candidates.extend(generate_brand_expansion(insights, existing, max_per_strategy))
+    candidates.extend(generate_title_decomp(insights, existing, max_per_strategy))
+    candidates.extend(generate_category_keywords(insights, existing, max_per_strategy))
+    candidates.extend(generate_synonyms(insights, existing, max_per_strategy))
+    candidates.extend(generate_series_expansion(db, existing, max_per_strategy))
+    candidates.extend(generate_demand(demand_products or [], existing, max_per_strategy))
+
+    # Final dedup + apparel filter
+    seen = set()
+    unique = []
+    for c in candidates:
+        key = c.keyword.lower().strip()
+        if key not in seen and key not in existing and not is_apparel(c.keyword):
+            seen.add(key)
+            unique.append(c)
+
+    logger.info(
+        "Generated %d unique candidates from %d total",
+        len(unique), len(candidates),
+    )
+    return unique
+
+
+def generate_brand_expansion(
+    insights: KeywordInsights,
+    existing: set[str],
+    max_count: int = 10,
+) -> list[CandidateProposal]:
+    """Strategy 1: Combine high-performing brands with product type tokens."""
+    candidates = []
+
+    # Get top brands (avg_profit > 3000, 2+ deals)
+    good_brands = [
+        b for b in insights.brand_patterns
+        if b.avg_profit >= 3000 and b.deal_count >= 2
+    ]
+
+    # Get top product type tokens
+    top_types = [p.product_type for p in insights.product_type_patterns[:15]]
+
+    # Find parent keyword ID for lineage
+    brand_parent_map: dict[str, int] = {}
+    for kp in insights.top_keywords:
+        for brand in good_brands:
+            if brand.brand_name in kp.keyword.lower():
+                brand_parent_map[brand.brand_name] = kp.keyword_id
+                break
+
+    for brand in good_brands:
+        parent_id = brand_parent_map.get(brand.brand_name)
+
+        for ptype in top_types:
+            # Skip if the product type is the brand itself
+            if ptype.lower() == brand.brand_name.lower():
+                continue
+
+            keyword = f"{brand.brand_name} {ptype}"
+            if keyword.lower() in existing:
+                continue
+
+            candidates.append(CandidateProposal(
+                keyword=keyword,
+                strategy="brand",
+                confidence=0.7,
+                parent_keyword_id=parent_id,
+                reasoning=f"ブランド「{brand.brand_name}」({brand.deal_count}件Deal, 平均利益¥{brand.avg_profit:,.0f}) × 商品種別「{ptype}」",
+            ))
+
+            if len(candidates) >= max_count:
+                return candidates
+
+    return candidates
+
+
+def generate_title_decomp(
+    insights: KeywordInsights,
+    existing: set[str],
+    max_count: int = 10,
+) -> list[CandidateProposal]:
+    """Strategy 2: Recombine high-scoring title tokens into new keywords."""
+    candidates = []
+
+    # Get top tokens (score > 1.0)
+    top_tokens = [
+        (token, score) for token, score in insights.title_tokens.items()
+        if score >= 1.0 and token.lower() not in KNOWN_BRANDS
+    ][:20]
+
+    if len(top_tokens) < 2:
+        return candidates
+
+    # Find a parent keyword for lineage
+    parent_id = insights.top_keywords[0].keyword_id if insights.top_keywords else None
+
+    # Generate 2-word combinations
+    for i, (t1, s1) in enumerate(top_tokens):
+        for t2, s2 in top_tokens[i + 1:]:
+            keyword = f"{t1} {t2}"
+            if keyword.lower() in existing:
+                continue
+
+            combined_score = (s1 + s2) / 2
+            candidates.append(CandidateProposal(
+                keyword=keyword,
+                strategy="title",
+                confidence=0.6,
+                parent_keyword_id=parent_id,
+                reasoning=f"高スコアトークン「{t1}」(スコア{s1:.1f}) + 「{t2}」(スコア{s2:.1f})",
+            ))
+
+            if len(candidates) >= max_count:
+                return candidates
+
+    return candidates
+
+
+def generate_category_keywords(
+    insights: KeywordInsights,
+    existing: set[str],
+    max_count: int = 10,
+) -> list[CandidateProposal]:
+    """Strategy 3: Use brand + condition variants from high-performing brands."""
+    candidates = []
+
+    good_brands = [
+        b for b in insights.brand_patterns
+        if b.avg_profit >= 3000 and b.deal_count >= 2
+    ]
+
+    brand_parent_map: dict[str, int] = {}
+    for kp in insights.top_keywords:
+        for brand in good_brands:
+            if brand.brand_name in kp.keyword.lower():
+                brand_parent_map[brand.brand_name] = kp.keyword_id
+                break
+
+    for brand in good_brands:
+        parent_id = brand_parent_map.get(brand.brand_name)
+        for suffix in CONDITION_SUFFIXES:
+            keyword = f"{brand.brand_name} {suffix}"
+            if keyword.lower() in existing:
+                continue
+            candidates.append(CandidateProposal(
+                keyword=keyword,
+                strategy="category",
+                confidence=0.65,
+                parent_keyword_id=parent_id,
+                reasoning=f"高利益ブランド「{brand.brand_name}」のバリエーション「{suffix}」",
+            ))
+            if len(candidates) >= max_count:
+                return candidates
+
+    return candidates
+
+
+def generate_synonyms(
+    insights: KeywordInsights,
+    existing: set[str],
+    max_count: int = 10,
+) -> list[CandidateProposal]:
+    """Strategy 4: English↔Katakana, abbreviation expansion, condition variants."""
+    candidates = []
+
+    # Build reverse synonym map
+    reverse_map = {v.lower(): k for k, v in SYNONYM_MAP.items()}
+    reverse_map.update({k: v for k, v in SYNONYM_MAP.items()})
+
+    for kp in insights.top_keywords:
+        if kp.performance_score < 0.1:
+            continue
+
+        kw_lower = kp.keyword.lower()
+        tokens = kw_lower.split()
+
+        # Token-level synonym replacement
+        for i, token in enumerate(tokens):
+            if token in reverse_map:
+                new_tokens = tokens.copy()
+                new_tokens[i] = reverse_map[token]
+                keyword = " ".join(new_tokens)
+                if keyword.lower() not in existing:
+                    candidates.append(CandidateProposal(
+                        keyword=keyword,
+                        strategy="synonym",
+                        confidence=0.5,
+                        parent_keyword_id=kp.keyword_id,
+                        reasoning=f"「{kp.keyword}」の類義語: {token} → {reverse_map[token]}",
+                    ))
+
+            # Abbreviation expansion
+            if token in ABBREVIATION_MAP:
+                expanded = ABBREVIATION_MAP[token]
+                keyword = kp.keyword.replace(token, expanded)
+                if keyword.lower() not in existing:
+                    candidates.append(CandidateProposal(
+                        keyword=keyword,
+                        strategy="synonym",
+                        confidence=0.5,
+                        parent_keyword_id=kp.keyword_id,
+                        reasoning=f"「{kp.keyword}」の略称展開: {token} → {expanded}",
+                    ))
+
+        if len(candidates) >= max_count:
+            break
+
+    return candidates[:max_count]
+
+
+_SERIES_DECOMPOSE_RE = re.compile(r"^([a-z]+)(\d+)([a-z]*)$")
+
+
+def _decompose_model(model: str) -> tuple[str, int, str] | None:
+    """Decompose model number into prefix + number + suffix.
+
+    "xd900"    → ("xd", 900, "")
+    "cfi1200a" → ("cfi", 1200, "a")
+    "wh1000xm4" → None (complex model, skip)
+    """
+    m = _SERIES_DECOMPOSE_RE.match(model)
+    if not m:
+        return None
+    return m.group(1), int(m.group(2)), m.group(3)
+
+
+def _guess_step(num: int) -> int:
+    """Guess the numeric step between sibling models."""
+    if num >= 100 and num % 100 == 0:
+        return 100   # xd900 → xd800, xd1000
+    if num >= 10 and num % 10 == 0:
+        return 10    # wf110 → wf100, wf120
+    return 1         # ps5 → ps4, ps6
+
+
+def generate_series_expansion(
+    db: Session,
+    existing: set[str],
+    max_count: int = 10,
+) -> list[CandidateProposal]:
+    """Strategy 5: Generate sibling model numbers from profitable deals."""
+    profitable_alerts = (
+        db.query(DealAlert)
+        .filter(
+            DealAlert.gross_profit >= settings.series_expansion_min_profit,
+            DealAlert.status != "rejected",
+        )
+        .order_by(DealAlert.gross_profit.desc())
+        .limit(50)
+        .all()
+    )
+
+    seen_models: set[str] = set()
+    candidates: list[CandidateProposal] = []
+
+    for alert in profitable_alerts:
+        brand, models, _ = extract_product_info(alert.yahoo_title)
+        for model in models:
+            if model in seen_models:
+                continue
+            seen_models.add(model)
+
+            parts = _decompose_model(model)
+            if not parts:
+                continue
+            prefix, num, suffix = parts
+            step = _guess_step(num)
+
+            for offset in [-2, -1, 1, 2]:
+                sibling_num = num + offset * step
+                if sibling_num <= 0:
+                    continue
+                sibling_model = f"{prefix}{sibling_num}{suffix}"
+                keyword = f"{brand} {sibling_model}" if brand else sibling_model
+
+                if keyword.lower() in existing:
+                    continue
+
+                candidates.append(CandidateProposal(
+                    keyword=keyword,
+                    strategy="series",
+                    confidence=0.75,
+                    parent_keyword_id=alert.keyword_id,
+                    reasoning=f"利益確認済み「{brand or ''} {model}」(¥{alert.gross_profit:,})のシリーズ展開",
+                ))
+
+            if len(candidates) >= max_count:
+                break
+        if len(candidates) >= max_count:
+            break
+
+    return candidates[:max_count]
+
+
+def generate_demand(
+    demand_products: list[dict],
+    existing: set[str],
+    max_count: int = 10,
+) -> list[CandidateProposal]:
+    """Strategy 6: Amazon中古で売れている商品の型番をキーワード候補に。
+
+    Keepa Product Finderで取得した商品から型番を抽出し、
+    ブランド+型番のキーワード候補を生成する。
+    """
+    candidates = []
+
+    for p in demand_products:
+        model = p.get("model") or ""
+        brand = p.get("brand") or ""
+        title = p.get("title") or ""
+
+        if not model or model == "None":
+            # modelフィールドがない場合、タイトルから型番抽出を試みる
+            models = extract_model_numbers_from_text(title)
+            if not models:
+                continue
+            model = sorted(models)[0]
+
+        # ブランド + 型番でキーワード生成
+        keyword = f"{brand} {model}".strip() if brand else model
+
+        if keyword.lower() in existing:
+            continue
+
+        stats = p.get("stats", {})
+        drops30 = stats.get("salesRankDrops30", 0) if isinstance(stats, dict) else 0
+
+        candidates.append(CandidateProposal(
+            keyword=keyword,
+            strategy="demand",
+            confidence=0.80,
+            parent_keyword_id=None,
+            reasoning=f"Amazon中古で月{drops30}回売れている商品",
+        ))
+
+        if len(candidates) >= max_count:
+            break
+
+    return candidates
+
+
+def _get_existing_keywords(db: Session) -> set[str]:
+    """Get all existing keyword strings (WatchedKeyword + pending candidates)."""
+    keywords = set()
+
+    for kw in db.query(WatchedKeyword.keyword).all():
+        keywords.add(kw[0].lower().strip())
+
+    for kc in (
+        db.query(KeywordCandidate.keyword)
+        .filter(KeywordCandidate.status.notin_(["rejected"]))
+        .all()
+    ):
+        keywords.add(kc[0].lower().strip())
+
+    return keywords

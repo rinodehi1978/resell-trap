@@ -7,12 +7,12 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
-# Add src/ to path so we can import resell_trap
+# Add src/ to path so we can import yafuama
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from resell_trap.config import settings  # noqa: E402
-from resell_trap.database import Base  # noqa: E402
-from resell_trap.models import MonitoredItem, StatusHistory, NotificationLog  # noqa: E402, F401
+from yafuama.config import settings  # noqa: E402
+from yafuama.database import Base  # noqa: E402
+from yafuama.models import MonitoredItem, StatusHistory, NotificationLog  # noqa: E402, F401
 
 config = context.config
 

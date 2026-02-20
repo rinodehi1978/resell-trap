@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}出品モニタリング - ヤフアマ{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div>
+    <h1 class="text-xl font-bold text-gray-900">出品モニタリング</h1>
+    <p class="text-sm text-gray-500 mt-1">Amazonに出品した商品の状況を管理します。</p>
+  </div>
+</div>
+
+<!-- Filter tabs -->
+<div class="flex space-x-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
+  {% for val, label in [("", "すべて"), ("active", "出品中"), ("ended_sold", "売却済"), ("ended_no_winner", "終了")] %}
+  <a href="/items{% if val %}?status={{ val }}{% endif %}"
+     class="px-3 py-1 text-xs rounded-md {% if status_filter == val %}bg-white shadow text-gray-900{% else %}text-gray-600 hover:text-gray-900{% endif %}">
+    {{ label }}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Item list -->
+{% set status_labels = {"active": "出品中", "ended_sold": "売却済", "ended_no_winner": "終了"} %}
+<div class="bg-white rounded-lg shadow-sm border divide-y">
+  {% for item in items %}
+  <a href="/items/{{ item.auction_id }}" class="flex items-center px-4 py-3 hover:bg-gray-50 gap-3">
+    {% if item.image_url %}
+    <img src="{{ item.image_url }}" alt="" class="w-14 h-14 object-cover rounded flex-shrink-0">
+    {% else %}
+    <div class="w-14 h-14 bg-gray-200 rounded flex-shrink-0"></div>
+    {% endif %}
+    <div class="min-w-0 flex-1">
+      <div class="text-sm font-medium text-gray-900 truncate">{{ item.title or item.auction_id }}</div>
+      <div class="flex items-center gap-2 mt-1 text-xs text-gray-500">
+        <span class="inline-block px-1.5 py-0.5 rounded font-medium
+          {% if item.status == 'active' %}bg-green-100 text-green-700
+          {% elif item.status == 'ended_sold' %}bg-blue-100 text-blue-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">{{ status_labels.get(item.status, item.status) }}</span>
+        <span>&yen;{{ "{:,}".format(item.current_price) }}</span>
+        {% if item.bid_count > 0 %}<span>{{ item.bid_count }}件入札</span>{% endif %}
+        {% if item.amazon_sku %}<span class="text-purple-600">SKU: {{ item.amazon_sku }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="text-right flex-shrink-0">
+      {% if item.amazon_price %}
+      <div class="text-sm font-medium text-purple-700">&yen;{{ "{:,}".format(item.amazon_price) }}</div>
+      <div class="text-xs text-gray-400">Amazon価格</div>
+      {% endif %}
+    </div>
+  </a>
+  {% else %}
+  <div class="px-4 py-8 text-center text-sm text-gray-500">出品中の商品はありません。</div>
+  {% endfor %}
+</div>
+
+{% endblock %}

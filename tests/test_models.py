@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from resell_trap.models import MonitoredItem, NotificationLog, StatusHistory
+from yafuama.models import MonitoredItem, NotificationLog, StatusHistory
 
 
 class TestMonitoredItem:

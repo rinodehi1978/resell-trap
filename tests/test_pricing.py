@@ -2,7 +2,7 @@
 
 import pytest
 
-from resell_trap.amazon.pricing import calculate_amazon_price, generate_sku
+from yafuama.amazon.pricing import calculate_amazon_price, generate_sku
 
 
 class TestCalculateAmazonPrice:

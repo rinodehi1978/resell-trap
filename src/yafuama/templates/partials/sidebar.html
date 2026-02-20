@@ -1,0 +1,22 @@
+<div class="flex items-center h-12 px-4 bg-gray-800">
+  <a href="/" class="text-white font-bold text-lg tracking-tight">ヤフアマ</a>
+</div>
+<nav class="flex-1 px-2 py-3 space-y-1">
+  {% set nav_items = [
+    ("dashboard", "/", "ダッシュボード"),
+    ("keywords", "/keywords", "オートスキャン"),
+    ("items", "/items", "出品モニタリング"),
+  ] %}
+  {% for id, href, label in nav_items %}
+  <a href="{{ href }}"
+     class="flex items-center px-3 py-2 text-sm rounded-md
+            {% if active_page == id %}bg-gray-800 text-white{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}">
+    {{ label }}
+  </a>
+  {% endfor %}
+</nav>
+<div class="px-4 py-3 border-t border-gray-700">
+  <div id="health-status" hx-get="/partials/health" hx-trigger="load, every 30s" hx-swap="innerHTML">
+    <span class="text-xs text-gray-500">Loading...</span>
+  </div>
+</div>

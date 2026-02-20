@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from resell_trap.database import Base
+from yafuama.database import Base
 
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples"
 

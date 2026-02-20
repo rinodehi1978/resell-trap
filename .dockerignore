@@ -7,3 +7,11 @@ __pycache__
 .pytest_cache
 .claude/
 samples/
+tests/
+.venv/
+venv/
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/

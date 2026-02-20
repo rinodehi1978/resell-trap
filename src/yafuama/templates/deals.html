@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Deal Finder - ヤフアマ{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-bold text-gray-900 mb-4">Deal Finder</h1>
+<p class="text-sm text-gray-500 mb-4">
+  ヤフオク仕入 → Amazon中古出品の価格差から利益が出る商品を自動検索。中古品のみ対象。粗利率40%以上・粗利¥3,000以上のみ表示。
+</p>
+
+<div class="bg-white rounded-lg shadow-sm border p-4 mb-4">
+  <form hx-get="/partials/deals-result" hx-target="#deals-result" hx-indicator="#deals-spinner" class="space-y-3">
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-3">
+      <div class="lg:col-span-2">
+        <label class="block text-xs font-medium text-gray-600 mb-1">検索キーワード</label>
+        <input type="text" name="q" value="{{ query or '' }}" placeholder="例: Nintendo Switch, Pokemon Card BOX" required
+               class="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">転送送料 (フォールバック)</label>
+        <input type="number" name="forwarding_cost" value="960" placeholder="960"
+               class="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <span class="text-xs text-gray-400">サイズ不明時のみ使用</span>
+      </div>
+      <div class="flex items-end">
+        <button type="submit" class="w-full px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 flex items-center justify-center gap-1">
+          検索
+          <span id="deals-spinner" class="htmx-indicator spinner inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full"></span>
+        </button>
+      </div>
+    </div>
+    <p class="text-xs text-gray-400">
+      コスト計算: ヤフオク価格 + ヤフオク送料 + 転送送料 + 検品料 + Amazon手数料(10%) &rarr; 粗利率40%以上 &amp; 粗利¥3,000以上のみ表示
+    </p>
+  </form>
+</div>
+
+<div id="deals-result"></div>
+{% endblock %}

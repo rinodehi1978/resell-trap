@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Keepa Analysis - ヤフアマ{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-bold text-gray-900 mb-4">Keepa Analysis</h1>
+
+<div class="bg-white rounded-lg shadow-sm border p-4 mb-4">
+  <form hx-get="/partials/keepa-result" hx-target="#keepa-result" hx-indicator="#keepa-spinner" class="space-y-3">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">ASIN</label>
+        <input type="text" name="asin" value="{{ asin or '' }}" placeholder="B07WXL5YPW" required
+               class="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Cost Price (yen)</label>
+        <input type="number" name="cost_price" value="{{ cost_price or '' }}" placeholder="0"
+               class="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Shipping Cost</label>
+        <input type="number" name="shipping_cost" value="{{ shipping_cost or '800' }}" placeholder="800"
+               class="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div class="flex items-end">
+        <button type="submit" class="w-full px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 flex items-center justify-center gap-1">
+          Analyze
+          <span id="keepa-spinner" class="htmx-indicator spinner inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full"></span>
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div id="keepa-result">
+  {% if analysis %}
+  {% include "partials/keepa_result.html" %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from resell_trap.keepa import KeepaApiError
-from resell_trap.main import app, app_state
+from yafuama.keepa import KeepaApiError
+from yafuama.main import app, app_state
 
 
 def _make_mock_product(asin="B08XYZ", title="Test Product"):

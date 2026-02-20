@@ -2,14 +2,18 @@
 
 import pytest
 
-from resell_trap.keepa.analyzer import (
+from yafuama.keepa.analyzer import (
     DEFAULT_GOOD_RANK_THRESHOLD,
+    SYSTEM_FEE,
+    DealCandidate,
     SalesRankAnalysis,
     UsedPriceAnalysis,
     analyze_product,
     analyze_sales_rank,
     analyze_used_price,
+    calculate_forwarding_cost,
     recommend_price,
+    score_deal,
 )
 
 
@@ -288,3 +292,244 @@ class TestAnalyzeProduct:
         assert result.sales_rank.current_rank is None
         assert result.used_price.current_price is None
         assert result.recommendation is None
+
+
+class TestCalculateForwardingCost:
+    """Tests for size-based forwarding cost calculation."""
+
+    def test_60_size(self):
+        """3-side total <= 600mm → 60 size = 735 yen."""
+        product = {"packageHeight": 100, "packageLength": 200, "packageWidth": 250}
+        assert calculate_forwarding_cost(product) == 735
+
+    def test_80_size(self):
+        """3-side total <= 800mm → 80 size = 840 yen."""
+        product = {"packageHeight": 200, "packageLength": 300, "packageWidth": 250}
+        assert calculate_forwarding_cost(product) == 840
+
+    def test_100_size(self):
+        """3-side total <= 1000mm → 100 size = 960 yen."""
+        product = {"packageHeight": 300, "packageLength": 350, "packageWidth": 300}
+        assert calculate_forwarding_cost(product) == 960
+
+    def test_120_size(self):
+        product = {"packageHeight": 400, "packageLength": 400, "packageWidth": 350}
+        assert calculate_forwarding_cost(product) == 1150
+
+    def test_140_size(self):
+        product = {"packageHeight": 500, "packageLength": 500, "packageWidth": 350}
+        assert calculate_forwarding_cost(product) == 1340
+
+    def test_160_size(self):
+        product = {"packageHeight": 500, "packageLength": 550, "packageWidth": 500}
+        assert calculate_forwarding_cost(product) == 1810
+
+    def test_180_size(self):
+        product = {"packageHeight": 600, "packageLength": 600, "packageWidth": 500}
+        assert calculate_forwarding_cost(product) == 3060
+
+    def test_200_size(self):
+        product = {"packageHeight": 700, "packageLength": 700, "packageWidth": 500}
+        assert calculate_forwarding_cost(product) == 3810
+
+    def test_over_200_returns_none(self):
+        """3-side total > 2000mm → None (not supported)."""
+        product = {"packageHeight": 800, "packageLength": 800, "packageWidth": 500}
+        assert calculate_forwarding_cost(product) is None
+
+    def test_no_dimensions_returns_none(self):
+        """No package dimensions → None."""
+        product = {}
+        assert calculate_forwarding_cost(product) is None
+
+    def test_partial_dimensions_returns_none(self):
+        """Only some dimensions present → None."""
+        product = {"packageHeight": 200, "packageLength": 300}
+        assert calculate_forwarding_cost(product) is None
+
+    def test_zero_dimension_returns_none(self):
+        """Zero dimension → None."""
+        product = {"packageHeight": 0, "packageLength": 300, "packageWidth": 200}
+        assert calculate_forwarding_cost(product) is None
+
+    def test_boundary_600(self):
+        """Exactly 600mm → 60 size."""
+        product = {"packageHeight": 200, "packageLength": 200, "packageWidth": 200}
+        assert calculate_forwarding_cost(product) == 735
+
+    def test_boundary_601(self):
+        """601mm → 80 size."""
+        product = {"packageHeight": 201, "packageLength": 200, "packageWidth": 200}
+        assert calculate_forwarding_cost(product) == 840
+
+
+class TestScoreDeal:
+    """Tests for the deal scoring / gross margin calculation.
+
+    New cost formula: total_cost = yahoo_price + yahoo_shipping + forwarding + SYSTEM_FEE(100)
+    inspection_fee is deprecated; SYSTEM_FEE is always 100 yen.
+    """
+
+    def _product_with_used(self, used_price, rank=50000, **extra):
+        """Make a Keepa product with used price and rank."""
+        product = _make_product(
+            current=[-1, -1, used_price, rank],
+            avg30=[-1, -1, used_price, rank],
+            avg90=[-1, -1, used_price, rank],
+        )
+        product.update(extra)
+        return product
+
+    def test_basic_profit_calculation(self):
+        """Yahoo 3000, shipping 0, forwarding fallback 800, system_fee 100.
+        Amazon used 10000, fee 10% = 1000.
+        total_cost = 3000 + 0 + 800 + 100 = 3900
+        gross_profit = 10000 - 3900 - 1000 = 5100
+        gross_margin = 5100 / 10000 * 100 = 51.0%
+        """
+        deal = score_deal(
+            yahoo_price=3000,
+            keepa_product=self._product_with_used(10000),
+            yahoo_shipping=0,
+            forwarding_cost=800,
+            amazon_fee_pct=10.0,
+        )
+        assert deal is not None
+        assert deal.total_cost == 3900
+        assert deal.amazon_fee == 1000
+        assert deal.gross_profit == 5100
+        assert deal.gross_margin_pct == 51.0
+        assert deal.sell_price == 10000
+        assert deal.system_fee == SYSTEM_FEE
+
+    def test_with_yahoo_shipping(self):
+        """Yahoo shipping adds to total cost."""
+        deal = score_deal(
+            yahoo_price=3000,
+            keepa_product=self._product_with_used(10000),
+            yahoo_shipping=1000,
+            forwarding_cost=800,
+        )
+        assert deal is not None
+        assert deal.total_cost == 3000 + 1000 + 800 + SYSTEM_FEE  # 4900
+        assert deal.yahoo_shipping == 1000
+
+    def test_no_price_returns_none(self):
+        """No used or new price -> None."""
+        product = _make_product(current=[-1, -1, -1, 50000])
+        deal = score_deal(yahoo_price=3000, keepa_product=product)
+        assert deal is None
+
+    def test_margin_threshold_filtering(self):
+        """Low-margin deals still returned (filtering is in views, not here)."""
+        deal = score_deal(
+            yahoo_price=8000,
+            keepa_product=self._product_with_used(10000),
+        )
+        assert deal is not None
+        assert deal.gross_profit < 0
+
+    def test_free_shipping_deal(self):
+        """Free Yahoo shipping = 0 cost component."""
+        deal = score_deal(
+            yahoo_price=2000,
+            keepa_product=self._product_with_used(8000),
+            yahoo_shipping=0,
+            forwarding_cost=500,
+        )
+        assert deal is not None
+        assert deal.total_cost == 2000 + 0 + 500 + SYSTEM_FEE  # 2600
+        assert deal.amazon_fee == 800  # 10% of 8000
+        assert deal.gross_profit == 8000 - 2600 - 800  # 4600
+
+    def test_cost_breakdown_fields(self):
+        """All cost fields are correctly populated."""
+        deal = score_deal(
+            yahoo_price=5000,
+            keepa_product=self._product_with_used(15000),
+            yahoo_shipping=500,
+            forwarding_cost=1000,
+            amazon_fee_pct=10.0,
+        )
+        assert deal is not None
+        assert deal.forwarding_cost == 1000
+        assert deal.system_fee == SYSTEM_FEE
+        assert deal.yahoo_shipping == 500
+        assert deal.amazon_fee == 1500  # 10% of 15000
+
+    def test_size_based_forwarding(self):
+        """When package dimensions are available, use size-based cost."""
+        # 3-side total = 200 + 300 + 250 = 750mm → 80 size = 840 yen
+        product = self._product_with_used(
+            10000,
+            packageHeight=200, packageLength=300, packageWidth=250,
+        )
+        deal = score_deal(
+            yahoo_price=3000,
+            keepa_product=product,
+            forwarding_cost=960,  # fallback, should NOT be used
+        )
+        assert deal is not None
+        assert deal.forwarding_cost == 840  # size-based, not fallback
+        assert deal.total_cost == 3000 + 0 + 840 + SYSTEM_FEE
+
+    def test_over_200_size_excluded(self):
+        """Package > 200 size (3-side total > 2000mm) → None."""
+        product = self._product_with_used(
+            10000,
+            packageHeight=800, packageLength=800, packageWidth=500,
+        )
+        deal = score_deal(yahoo_price=3000, keepa_product=product)
+        assert deal is None
+
+    def test_no_dimensions_uses_fallback(self):
+        """No package dimensions → use forwarding_cost fallback."""
+        deal = score_deal(
+            yahoo_price=3000,
+            keepa_product=self._product_with_used(10000),
+            forwarding_cost=960,
+        )
+        assert deal is not None
+        assert deal.forwarding_cost == 960
+        assert deal.total_cost == 3000 + 0 + 960 + SYSTEM_FEE
+
+    def test_sells_well_flag(self):
+        """sells_well is True when rank <= threshold."""
+        deal = score_deal(
+            yahoo_price=1000,
+            keepa_product=self._product_with_used(5000, rank=50000),
+            good_rank_threshold=100000,
+        )
+        assert deal is not None
+        assert deal.sells_well is True
+
+    def test_sells_poorly_flag(self):
+        """sells_well is False when rank > threshold."""
+        deal = score_deal(
+            yahoo_price=1000,
+            keepa_product=self._product_with_used(5000, rank=200000),
+            good_rank_threshold=100000,
+        )
+        assert deal is not None
+        assert deal.sells_well is False
+
+    def test_new_only_product_excluded(self):
+        """Products with only new price (no used price) are excluded."""
+        product = _make_product(
+            current=[-1, 8000, -1, 50000],
+            avg30=[-1, 8000, -1, 50000],
+            avg90=[-1, 8000, -1, 50000],
+        )
+        deal = score_deal(yahoo_price=3000, keepa_product=product)
+        assert deal is None
+
+    def test_used_price_used_as_sell_price(self):
+        """Sell price is based on used price, not new price."""
+        product = _make_product(
+            current=[-1, 15000, 8000, 50000],
+            avg30=[-1, 15000, 8000, 50000],
+            avg90=[-1, 15000, 8000, 50000],
+        )
+        deal = score_deal(yahoo_price=3000, keepa_product=product)
+        assert deal is not None
+        assert deal.sell_price == 8000
