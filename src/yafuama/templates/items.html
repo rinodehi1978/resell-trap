@@ -11,7 +11,7 @@
 
 <!-- Filter tabs -->
 <div class="flex space-x-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
-  {% for val, label in [("", "すべて"), ("active", "出品中"), ("ended_sold", "売却済"), ("ended_no_winner", "終了")] %}
+  {% for val, label in [("", "すべて"), ("active", "ヤフオク出品中"), ("ended_sold", "落札済"), ("ended_no_winner", "終了")] %}
   <a href="/items{% if val %}?status={{ val }}{% endif %}"
      class="px-3 py-1 text-xs rounded-md {% if status_filter == val %}bg-white shadow text-gray-900{% else %}text-gray-600 hover:text-gray-900{% endif %}">
     {{ label }}
@@ -20,7 +20,8 @@
 </div>
 
 <!-- Item list -->
-{% set status_labels = {"active": "出品中", "ended_sold": "売却済", "ended_no_winner": "終了"} %}
+{% set yahoo_labels = {"active": "ヤフオク出品中", "ended_sold": "落札済", "ended_no_winner": "終了"} %}
+{% set amazon_labels = {"active": "Amazon出品中", "inactive": "Amazon停止", "delisted": "Amazon取下げ", "error": "Amazonエラー"} %}
 <div class="bg-white rounded-lg shadow-sm border divide-y">
   {% for item in items %}
   <a href="/items/{{ item.auction_id }}" class="flex items-center px-4 py-3 hover:bg-gray-50 gap-3">
@@ -35,10 +36,22 @@
         <span class="inline-block px-1.5 py-0.5 rounded font-medium
           {% if item.status == 'active' %}bg-green-100 text-green-700
           {% elif item.status == 'ended_sold' %}bg-blue-100 text-blue-700
-          {% else %}bg-gray-100 text-gray-600{% endif %}">{{ status_labels.get(item.status, item.status) }}</span>
+          {% else %}bg-gray-100 text-gray-600{% endif %}">{{ yahoo_labels.get(item.status, item.status) }}</span>
+        {% if item.amazon_listing_status == 'active' %}
+        <span class="inline-block px-1.5 py-0.5 rounded font-medium bg-purple-100 text-purple-700">Amazon出品中</span>
+        {% elif item.amazon_listing_status == 'delisted' %}
+        <span class="inline-block px-1.5 py-0.5 rounded font-medium bg-orange-100 text-orange-700">Amazon取下げ</span>
+        {% elif item.amazon_listing_status == 'error' %}
+        <span class="inline-block px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-700">Amazonエラー</span>
+        {% endif %}
+        {% set cl_status = checklist_complete(item) %}
+        {% if cl_status == false %}
+        <span class="inline-block px-1.5 py-0.5 rounded font-medium bg-yellow-100 text-yellow-700">&#9888; 未確認</span>
+        {% elif cl_status == true %}
+        <span class="inline-block px-1.5 py-0.5 rounded font-medium bg-green-100 text-green-700">&#10003; 確認済</span>
+        {% endif %}
         <span>&yen;{{ "{:,}".format(item.current_price) }}</span>
         {% if item.bid_count > 0 %}<span>{{ item.bid_count }}件入札</span>{% endif %}
-        {% if item.amazon_sku %}<span class="text-purple-600">SKU: {{ item.amazon_sku }}</span>{% endif %}
       </div>
     </div>
     <div class="text-right flex-shrink-0">

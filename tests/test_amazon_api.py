@@ -341,7 +341,7 @@ class TestShippingPatterns:
         assert len(data["delivery_regions"]) == 6
 
     def test_create_listing_with_shipping_pattern(self, client, mock_scraper, mock_sp_client):
-        """Shipping pattern sets correct lead_time and merchant_shipping_group."""
+        """Shipping pattern sets correct lead_time in DB; offer-only mode skips shipping attrs."""
         _create_monitored_item(client, mock_scraper)
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
@@ -354,10 +354,11 @@ class TestShippingPatterns:
         data = resp.json()
         assert data["amazon_lead_time_days"] == 4
         assert data["amazon_shipping_pattern"] == "1_2_days"
-        # Verify SP-API call includes merchant_shipping_group
+        # With ASIN: LISTING_OFFER_ONLY mode uses merchant_suggested_asin
         call_kwargs = mock_sp_client.create_listing.call_args
         attributes = call_kwargs[1]["attributes"] if "attributes" in call_kwargs[1] else call_kwargs[0][3]
-        assert "merchant_shipping_group" in attributes
+        assert "merchant_suggested_asin" in attributes
+        assert call_kwargs[1].get("offer_only") is True
 
     def test_create_listing_with_3_7_days_pattern(self, client, mock_scraper, mock_sp_client):
         """3〜7日パターン → リードタイム9日."""
@@ -408,3 +409,82 @@ class TestSpApiNotConfigured:
         resp = c.get("/api/amazon/catalog/search?keywords=test")
         assert resp.status_code == 503
         app_state.clear()
+
+
+class TestGetReferralFeePct:
+    """Tests for SpApiClient.get_referral_fee_pct()."""
+
+    def _make_client(self):
+        from unittest.mock import patch, MagicMock
+        with patch("yafuama.amazon.client.settings") as mock_settings:
+            mock_settings.sp_api_refresh_token = "test"
+            mock_settings.sp_api_lwa_app_id = "test"
+            mock_settings.sp_api_lwa_client_secret = "test"
+            mock_settings.sp_api_aws_access_key = "test"
+            mock_settings.sp_api_aws_secret_key = "test"
+            mock_settings.sp_api_role_arn = "test"
+            mock_settings.sp_api_marketplace = "A1VC38T7YXB528"
+            mock_settings.sp_api_seller_id = "SELLER1"
+            from yafuama.amazon.client import SpApiClient
+            client = SpApiClient()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_returns_fee_pct_and_caches(self):
+        """Should extract referral fee % from API response and cache it."""
+        client = self._make_client()
+        fee_response = {
+            "FeesEstimateResult": {
+                "Status": "Success",
+                "FeesEstimate": {
+                    "TotalFeesEstimate": {"CurrencyCode": "JPY", "Amount": 3897.0},
+                    "FeeDetailList": [
+                        {
+                            "FeeType": "ReferralFee",
+                            "FeeAmount": {"CurrencyCode": "JPY", "Amount": 3897.0},
+                        },
+                    ],
+                },
+            }
+        }
+        client._call = AsyncMock(return_value=fee_response)
+
+        result = await client.get_referral_fee_pct("B001TEST", 25980)
+
+        assert result == 15.0  # 3897 / 25980 * 100 = 15.0%
+        assert "B001TEST" in client._fee_cache
+        assert client._fee_cache["B001TEST"] == 15.0
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_skips_api_call(self):
+        """Cached ASIN should not trigger another API call."""
+        client = self._make_client()
+        client._fee_cache["B002CACHED"] = 8.0
+        client._call = AsyncMock()
+
+        result = await client.get_referral_fee_pct("B002CACHED", 10000)
+
+        assert result == 8.0
+        client._call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_none(self):
+        """API error should return None (caller uses fallback)."""
+        client = self._make_client()
+        client._call = AsyncMock(side_effect=AmazonApiError("Throttled", 429))
+
+        result = await client.get_referral_fee_pct("B003ERROR", 10000)
+
+        assert result is None
+        assert "B003ERROR" not in client._fee_cache
+
+    @pytest.mark.asyncio
+    async def test_zero_price_returns_none(self):
+        """Price of 0 should return None immediately."""
+        client = self._make_client()
+        client._call = AsyncMock()
+
+        result = await client.get_referral_fee_pct("B004ZERO", 0)
+
+        assert result is None
+        client._call.assert_not_called()

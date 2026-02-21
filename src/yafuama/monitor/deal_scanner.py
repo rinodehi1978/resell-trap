@@ -33,15 +33,23 @@ class DealScanner:
         keepa_client,
         webhook_url: str = "",
         webhook_type: str = "discord",
+        sp_api_client=None,
     ) -> None:
         self._scraper = scraper
         self._keepa = keepa_client
         self._webhook_url = webhook_url
         self._webhook_type = webhook_type
         self._deep_validation_count = 0
+        self._sp_api = sp_api_client
 
     async def scan_all(self) -> None:
-        """Scan all active watched keywords and notify on new deals."""
+        """Scan all active watched keywords and notify on new deals.
+
+        Keywords are scanned in rotation order: least-recently-scanned first
+        (never-scanned keywords get top priority). Scanning stops early when
+        Keepa tokens are exhausted, so the next cycle picks up where this one
+        left off.
+        """
         self._deep_validation_count = 0
         self._keepa.clear_search_cache()
         db = SessionLocal()
@@ -49,25 +57,89 @@ class DealScanner:
             keywords = (
                 db.query(WatchedKeyword)
                 .filter(WatchedKeyword.is_active == True)  # noqa: E712
+                .order_by(
+                    # NULL (never scanned) first, then oldest scan first
+                    WatchedKeyword.last_scanned_at.is_(None).desc(),
+                    WatchedKeyword.last_scanned_at.asc(),
+                )
                 .all()
             )
             if not keywords:
                 return
 
+            scanned = 0
             for kw in keywords:
+                # Check Keepa token budget before each keyword
+                tokens = self._keepa.tokens_left
+                if tokens is not None and tokens <= 5:
+                    logger.info(
+                        "Keepa tokens low (%s remaining), pausing scan after %d/%d keywords. "
+                        "Remaining keywords will be prioritized next cycle.",
+                        tokens, scanned, len(keywords),
+                    )
+                    break
+
                 try:
-                    await self._scan_keyword(kw, db)
+                    new_deals = await self._scan_keyword(kw, db)
                     kw.last_scanned_at = datetime.now(timezone.utc)
                     kw.total_scans += 1
+                    if new_deals:
+                        kw.scans_since_last_deal = 0
+                    else:
+                        kw.scans_since_last_deal += 1
+                    scanned += 1
                 except Exception as e:
                     logger.warning("Error scanning keyword '%s': %s", kw.keyword, e)
 
+            # Auto-cleanup underperforming keywords
+            self._cleanup_keywords(db)
+
+            logger.info("Scan cycle complete: %d/%d keywords scanned", scanned, len(keywords))
             db.commit()
         except Exception as e:
             logger.exception("Error in deal scan loop: %s", e)
             db.rollback()
         finally:
             db.close()
+
+    def _cleanup_keywords(self, db) -> None:
+        """Auto-cleanup underperforming keywords after each scan cycle.
+
+        Rules:
+        - AI-generated + 0 deals + 10+ scans → DELETE
+        - Manual + 0 deals + 50+ scans → DELETE
+        - Manual + has deals + 50+ scans since last deal → PAUSE (is_active=False)
+        """
+        cleanup_threshold_manual = 50
+        cleanup_threshold_ai = 10
+
+        keywords = db.query(WatchedKeyword).filter(WatchedKeyword.is_active == True).all()  # noqa: E712
+        for kw in keywords:
+            # AI-generated: delete after 10 scans with no results
+            if kw.source != "manual" and kw.total_deals_found == 0 and kw.total_scans >= cleanup_threshold_ai:
+                logger.info(
+                    "Auto-deleting AI keyword '%s': %d scans, 0 deals",
+                    kw.keyword, kw.total_scans,
+                )
+                db.delete(kw)
+                continue
+
+            # Manual + never found a deal: delete after 50 scans
+            if kw.source == "manual" and kw.total_deals_found == 0 and kw.total_scans >= cleanup_threshold_manual:
+                logger.info(
+                    "Auto-deleting manual keyword '%s': %d scans, 0 deals",
+                    kw.keyword, kw.total_scans,
+                )
+                db.delete(kw)
+                continue
+
+            # Manual + has deals but dormant: pause after 50 consecutive scans without new deal
+            if kw.source == "manual" and kw.total_deals_found > 0 and kw.scans_since_last_deal >= cleanup_threshold_manual:
+                logger.info(
+                    "Auto-pausing manual keyword '%s': %d scans since last deal",
+                    kw.keyword, kw.scans_since_last_deal,
+                )
+                kw.is_active = False
 
     async def scan_keyword_by_id(self, keyword_id: int) -> list[dict]:
         """Manually trigger scan for a single keyword. Returns list of new deal dicts."""
@@ -128,6 +200,8 @@ class DealScanner:
                 sell_price=deal.sell_price,
                 gross_profit=deal.gross_profit,
                 gross_margin_pct=deal.gross_margin_pct,
+                amazon_fee_pct=round(deal.amazon_fee / deal.sell_price * 100, 1) if deal.sell_price else 10.0,
+                forwarding_cost=deal.forwarding_cost,
             )
             db.add(alert)
 
@@ -315,13 +389,25 @@ class DealScanner:
             except ImportError:
                 pass
 
+            # Dynamic referral fee lookup via SP-API (fallback to config default)
+            fee_pct = settings.deal_amazon_fee_pct
+            if self._sp_api is not None:
+                _asin = kp.get("asin", "")
+                _stats = kp.get("stats") or {}
+                _current = _stats.get("current") or []
+                _used_price = _current[2] if len(_current) > 2 and _current[2] not in (None, -1) else 0
+                if _asin and _used_price > 0:
+                    actual_pct = await self._sp_api.get_referral_fee_pct(_asin, _used_price)
+                    if actual_pct is not None:
+                        fee_pct = actual_pct
+
             deal = score_deal(
                 yahoo_price=yahoo_price,
                 keepa_product=kp,
                 yahoo_shipping=yahoo_shipping,
                 forwarding_cost=settings.deal_forwarding_cost,
                 inspection_fee=settings.deal_inspection_fee,
-                amazon_fee_pct=settings.deal_amazon_fee_pct,
+                amazon_fee_pct=fee_pct,
                 good_rank_threshold=settings.keepa_good_rank_threshold,
             )
             if deal and result.score > best_score:

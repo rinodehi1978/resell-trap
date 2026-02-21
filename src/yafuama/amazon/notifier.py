@@ -34,24 +34,25 @@ class AmazonNotifier(BaseNotifier):
 
         new_status = change.new_status or ""
         if new_status.startswith("ended_"):
-            return await self._set_quantity(item, 0)
-        elif new_status == "active":
-            return await self._set_quantity(item, 1)
+            return await self._delete_listing(item)
 
         return True
 
-    async def _set_quantity(self, item: MonitoredItem, quantity: int) -> bool:
-        action = "deactivating" if quantity == 0 else "reactivating"
+    async def _delete_listing(self, item: MonitoredItem) -> bool:
+        """Delete Amazon listing when Yahoo auction ends."""
         logger.info(
-            "%s Amazon listing for %s (SKU: %s)", action, item.auction_id, item.amazon_sku
+            "Deleting Amazon listing for ended auction %s (SKU: %s)",
+            item.auction_id, item.amazon_sku,
         )
         try:
-            await self.client.patch_listing_quantity(self.seller_id, item.amazon_sku, quantity)
-            item.amazon_listing_status = "inactive" if quantity == 0 else "active"
-            item.amazon_last_synced_at = datetime.now(timezone.utc)
+            await self.client.delete_listing(self.seller_id, item.amazon_sku)
+            item.amazon_sku = None
+            item.amazon_listing_status = "delisted"
+            item.amazon_last_synced_at = None
+            item.updated_at = datetime.now(timezone.utc)
             return True
         except AmazonApiError as e:
-            logger.error("Failed to update Amazon listing for %s: %s", item.amazon_sku, e)
+            logger.error("Failed to delete Amazon listing for %s: %s", item.amazon_sku, e)
             item.amazon_listing_status = "error"
             return False
 

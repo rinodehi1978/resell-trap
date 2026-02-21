@@ -147,17 +147,3 @@ async def validate_candidate(
         best_profit=best_profit,
         keepa_tokens_used=1,
     )
-
-
-def should_auto_add(
-    candidate: CandidateProposal,
-    result: ValidationResult,
-    threshold: float = 0.6,
-) -> bool:
-    """Check if a validated candidate should be auto-added to WatchedKeyword."""
-    return (
-        result.is_valid
-        and candidate.confidence >= threshold
-        and result.potential_deals >= 2
-        and result.best_profit >= 5000
-    )

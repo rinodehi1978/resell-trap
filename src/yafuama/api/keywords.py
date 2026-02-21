@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..matcher import is_apparel
-from ..models import DealAlert, MonitoredItem, WatchedKeyword
+from ..models import DealAlert, MonitoredItem, StatusHistory, WatchedKeyword
 from ..schemas import (
     DealAlertListResponse,
     WatchedKeywordCreate,
@@ -18,6 +19,7 @@ from ..schemas import (
     WatchedKeywordUpdate,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/keywords", tags=["keywords"])
 
 
@@ -182,10 +184,12 @@ async def list_from_deal(
         "condition": "used_very_good",
         "price": 9800,
         "condition_note": "動作確認済み。...",
-        "image_urls": ["https://..."]
+        "image_urls": ["https://..."],
+        "shipping_pattern": "2_3_days"
     }
     """
     from ..amazon.pricing import calculate_amazon_price, generate_sku
+    from ..amazon.shipping import get_pattern_by_key
     from ..config import settings
     from ..main import app_state
     from ..schemas import VALID_CONDITIONS
@@ -193,6 +197,16 @@ async def list_from_deal(
     alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
     if not alert:
         raise HTTPException(404, "Alert not found")
+
+    # ヤフオクが落札済み/終了済みでないか確認
+    scraper = app_state.get("scraper")
+    if scraper:
+        auction_data = await scraper.fetch_auction(alert.yahoo_auction_id)
+        if auction_data and auction_data.is_closed:
+            status_label = "落札済み" if auction_data.has_winner else "終了（落札者なし）"
+            raise HTTPException(
+                410, f"このヤフオクは既に{status_label}です。出品できません。"
+            )
 
     body = body or {}
     condition = body.get("condition", "used_very_good")
@@ -237,6 +251,13 @@ async def list_from_deal(
 
     sku = generate_sku(alert.yahoo_auction_id)
 
+    # Resolve shipping pattern → lead time + template name
+    shipping_pattern_key = body.get("shipping_pattern", "2_3_days")
+    pattern = get_pattern_by_key(shipping_pattern_key)
+    if not pattern:
+        raise HTTPException(400, f"Invalid shipping_pattern: {shipping_pattern_key}")
+    lead_time = pattern.lead_time_days
+
     try:
         from ..amazon import AmazonApiError
 
@@ -262,7 +283,13 @@ async def list_from_deal(
             "fulfillment_availability": [
                 {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
             ],
-            "lead_time_to_ship_max_days": [{"value": 4}],
+            # Offer on existing ASIN: use LISTING_OFFER_ONLY mode
+            "merchant_suggested_asin": [{
+                "value": alert.amazon_asin,
+                "marketplace_id": settings.sp_api_marketplace,
+            }],
+            "merchant_shipping_group": [{"value": pattern.template_name}],
+            "lead_time_to_ship_max_days": [{"value": lead_time}],
         }
 
         # Condition note (product description)
@@ -272,20 +299,44 @@ async def list_from_deal(
                 {"value": condition_note, "language_tag": "ja_JP"}
             ]
 
-        # Product images from Yahoo auction
+        # Offer images from Yahoo auction
         image_urls = body.get("image_urls", [])
         if image_urls:
-            attributes["main_product_images"] = [
+            attributes["main_offer_image_locator"] = [
                 {"media_location": image_urls[0]}
             ]
-            if len(image_urls) > 1:
-                attributes["other_product_images"] = [
-                    {"media_location": url} for url in image_urls[1:9]
+            for i, url in enumerate(image_urls[1:6]):
+                attributes[f"other_offer_image_locator_{i + 1}"] = [
+                    {"media_location": url}
                 ]
 
-        await sp_client.create_listing(
-            settings.sp_api_seller_id, sku, "PRODUCT", attributes
-        )
+        # Get correct productType from Catalog API
+        product_type = await sp_client.get_product_type(alert.amazon_asin)
+
+        # Try with lead_time; if INVALID, retry without it
+        try:
+            await sp_client.create_listing(
+                settings.sp_api_seller_id, sku, product_type, attributes,
+                offer_only=True,
+            )
+        except AmazonApiError as e:
+            if "INVALID" in str(e):
+                logger.info("Listing INVALID with lead_time for %s, retrying without", sku)
+                attributes.pop("lead_time_to_ship_max_days", None)
+                await sp_client.create_listing(
+                    settings.sp_api_seller_id, sku, product_type, attributes,
+                    offer_only=True,
+                )
+                # Fallback: try PATCH for lead_time
+                try:
+                    await sp_client.patch_listing_lead_time(
+                        settings.sp_api_seller_id, sku, lead_time,
+                    )
+                except AmazonApiError:
+                    logger.info("lead_time PATCH also failed for %s", sku)
+            else:
+                raise
+
     except AmazonApiError as e:
         raise HTTPException(502, f"SP-API error: {e}") from e
 
@@ -296,10 +347,24 @@ async def list_from_deal(
     item.amazon_listing_status = "active"
     item.amazon_price = amazon_price
     item.estimated_win_price = estimated_price
-    item.shipping_cost = shipping
-    item.amazon_margin_pct = margin
+    item.shipping_cost = alert.yahoo_shipping or 0
+    item.forwarding_cost = alert.forwarding_cost if alert.forwarding_cost > 0 else settings.deal_forwarding_cost
+    item.amazon_fee_pct = alert.amazon_fee_pct if alert.amazon_fee_pct > 0 else settings.deal_amazon_fee_pct
+    item.amazon_margin_pct = alert.gross_margin_pct if alert.gross_margin_pct > 0 else margin
+    item.amazon_lead_time_days = lead_time
+    item.amazon_shipping_pattern = shipping_pattern_key
+    item.amazon_condition_note = body.get("condition_note", "")
     item.is_monitoring_active = True
+    item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
+    item.seller_central_checklist = ""  # チェックリストリセット
+
+    # 履歴に記録
+    db.add(StatusHistory(
+        item_id=item.id, auction_id=item.auction_id,
+        change_type="amazon_listing",
+        new_status=sku,
+    ))
     db.commit()
 
     return {

@@ -98,11 +98,12 @@ class AuctionPageParser:
     def extract_all_images(self, html: str) -> list[str]:
         """Extract all product image URLs from an auction page.
 
-        Tries (in order): pageData JSON fields, og:image meta, DOM regex fallback.
+        Combines: pageData JSON fields, DOM regex scan, og:image meta.
+        Deduplicates while preserving order (main image first).
         """
         images: list[str] = []
 
-        # 1. pageData JSON
+        # 1. pageData JSON (structured data, most reliable if available)
         m = self._PAGE_DATA_RE.search(html)
         if m:
             try:
@@ -117,20 +118,18 @@ class AuctionPageParser:
                                 images.append(url)
                     elif isinstance(val, str) and val:
                         images.append(val)
-                    if images:
-                        break
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # 2. og:image fallback (single image)
-        if not images:
-            og = self._OG_IMAGE_RE.search(html)
-            if og:
-                images.append(og.group(1))
+        # 2. DOM regex scan — find all Yahoo auction CDN image URLs in HTML
+        #    Always try if pageData yielded ≤1 image (og:image alone is not enough)
+        if len(images) <= 1:
+            images.extend(self._IMG_URL_RE.findall(html))
 
-        # 3. DOM regex fallback — find all Yahoo auction CDN image URLs
-        if not images:
-            images = self._IMG_URL_RE.findall(html)
+        # 3. og:image as supplement (ensures main image is always present)
+        og = self._OG_IMAGE_RE.search(html)
+        if og:
+            images.append(og.group(1))
 
         # Deduplicate while preserving order
         seen: set[str] = set()

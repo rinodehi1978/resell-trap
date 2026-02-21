@@ -18,7 +18,7 @@
 </div>
 
 <!-- AI Discovery panel -->
-{% if discovery_available or pending_candidates_count > 0 %}
+{% if discovery_available %}
 <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg shadow-sm border border-purple-200 p-4 mb-4">
   <div class="flex items-center justify-between mb-3">
     <div class="flex items-center gap-2">
@@ -42,8 +42,8 @@
       <div class="text-[10px] text-gray-500">AI キーワード</div>
     </div>
     <div>
-      <div class="text-lg font-bold text-amber-600">{{ pending_candidates_count }}</div>
-      <div class="text-[10px] text-gray-500">承認待ち候補</div>
+      <div class="text-lg font-bold text-amber-600">{{ auto_added_count }}</div>
+      <div class="text-[10px] text-gray-500">自動登録済み</div>
     </div>
     <div>
       <div class="text-lg font-bold text-green-600">{{ ai_deals }}</div>
@@ -63,46 +63,6 @@
 </div>
 {% endif %}
 
-<!-- Pending candidates -->
-{% if pending_candidates %}
-<div class="bg-white rounded-lg shadow-sm border mb-4">
-  <div class="px-4 py-3 border-b flex items-center justify-between">
-    <h2 class="text-sm font-semibold text-gray-900">承認待ちキーワード候補 ({{ pending_candidates|length }}件)</h2>
-  </div>
-  <div class="divide-y">
-    {% for c in pending_candidates %}
-    <div class="px-4 py-3 flex items-center gap-4" id="candidate-row-{{ c.id }}">
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-medium text-gray-900">{{ c.keyword }}</span>
-          <span class="px-1.5 py-0.5 text-[10px] rounded-full
-            {% if c.strategy == 'brand' %}bg-purple-100 text-purple-700
-            {% elif c.strategy == 'title' %}bg-blue-100 text-blue-700
-            {% elif c.strategy == 'category' %}bg-teal-100 text-teal-700
-            {% elif c.strategy == 'synonym' %}bg-amber-100 text-amber-700
-            {% elif c.strategy == 'llm' %}bg-pink-100 text-pink-700
-            {% elif c.strategy == 'series' %}bg-green-100 text-green-700
-            {% elif c.strategy == 'demand' %}bg-emerald-100 text-emerald-700
-            {% else %}bg-gray-100 text-gray-600{% endif %}">{{ c.strategy }}</span>
-          <span class="text-[10px] text-gray-400">信頼度 {{ "%.0f"|format(c.confidence * 100) }}%</span>
-        </div>
-        <div class="text-xs text-gray-500 mt-0.5 truncate">{{ c.reasoning }}</div>
-      </div>
-      <div class="flex items-center gap-2 flex-shrink-0">
-        <button onclick="approveCandidate({{ c.id }})"
-                class="px-2 py-1 text-xs bg-green-50 text-green-700 hover:bg-green-100 rounded">
-          承認
-        </button>
-        <button onclick="rejectCandidate({{ c.id }})"
-                class="px-2 py-1 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded">
-          却下
-        </button>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
 
 <!-- AI Seed Keywords (cold start) -->
 {% if keywords|length < 5 and anthropic_configured %}
@@ -262,16 +222,20 @@
           </div>
           {% endif %}
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs">
-            <span class="text-gray-500">Yahoo: <span class="font-semibold">&yen;{{ "{:,}".format(alert.yahoo_price) }}</span>{% if alert.yahoo_shipping %}<span class="text-gray-400"> +送料¥{{ "{:,}".format(alert.yahoo_shipping) }}</span>{% endif %}</span>
+            <span class="text-gray-500">仕入: <span class="font-semibold">&yen;{{ "{:,}".format(alert.yahoo_price) }}</span>{% if alert.yahoo_shipping %}<span class="text-gray-400"> +送料¥{{ "{:,}".format(alert.yahoo_shipping) }}</span>{% endif %}</span>
             <span class="text-gray-400">&rarr;</span>
-            <span class="text-gray-500">Amazon: <span class="font-semibold text-purple-700">&yen;{{ "{:,}".format(alert.sell_price) }}</span></span>
+            <span class="text-gray-500">販売: <span class="font-semibold text-purple-700">&yen;{{ "{:,}".format(alert.sell_price) }}</span>
+              <span class="text-[10px] text-gray-400">(手数料{{ alert.amazon_fee_pct }}% / 転送¥{{ "{:,}".format(alert.forwarding_cost) }} / 利用料¥100)</span>
+            </span>
+          </div>
+          <div class="flex items-center gap-x-2 mt-0.5 text-xs">
             <span class="font-semibold text-green-700">粗利 &yen;{{ "{:,}".format(alert.gross_profit) }} ({{ alert.gross_margin_pct }}%)</span>
-            <span class="text-gray-400">{{ alert.notified_at.strftime('%m/%d %H:%M') }}</span>
+            <span class="text-[10px] text-gray-400">{{ alert.notified_at.strftime('%m/%d %H:%M') }}</span>
           </div>
         </div>
         <!-- Action buttons -->
         <div class="relative flex flex-col gap-1.5 flex-shrink-0 ml-2">
-          <button onclick="openListingModal({{ alert.id }}, '{{ alert.yahoo_auction_id }}', '{{ alert.amazon_asin }}', '{{ alert.yahoo_title|e }}', {{ alert.yahoo_price }}, {{ alert.yahoo_shipping }}, {{ alert.sell_price }})"
+          <button onclick="openListingModal({{ alert.id }}, '{{ alert.yahoo_auction_id }}', '{{ alert.amazon_asin }}', '{{ alert.yahoo_title|e }}', {{ alert.yahoo_price }}, {{ alert.yahoo_shipping }}, {{ alert.sell_price }}, {{ alert.amazon_fee_pct }}, {{ alert.forwarding_cost }})"
                   class="px-2.5 py-1 text-xs bg-green-600 text-white hover:bg-green-700 rounded font-medium">
             出品
           </button>
@@ -310,26 +274,52 @@
           </div>
         </div>
 
-        <!-- Price summary -->
-        <div class="grid grid-cols-4 gap-2 bg-gray-50 rounded-lg p-3">
-          <div class="text-center">
-            <div class="text-[10px] text-gray-500">即決価格</div>
-            <div class="text-sm font-bold text-red-600" id="modal-yahoo-price"></div>
+        <!-- Price breakdown: cost → expenses → sell → profit -->
+        <div class="bg-gray-50 rounded-lg p-3 space-y-2">
+          <!-- Row 1: 仕入れ -->
+          <div>
+            <div class="text-[10px] font-medium text-gray-500 mb-1">仕入れ</div>
+            <div class="flex items-center gap-2 text-xs">
+              <span class="text-gray-600">即決価格</span>
+              <span class="font-bold text-red-600" id="modal-yahoo-price"></span>
+              <span class="text-gray-400">+</span>
+              <span class="text-gray-600">送料</span>
+              <span class="font-bold text-orange-500" id="modal-shipping"></span>
+            </div>
+            <div class="text-[10px] text-gray-400 mt-0.5" id="modal-total-cost"></div>
           </div>
-          <div class="text-center">
-            <div class="text-[10px] text-gray-500">送料</div>
-            <div class="text-sm font-bold text-orange-500" id="modal-shipping"></div>
+          <!-- Row 2: Amazon経費 -->
+          <div>
+            <div class="text-[10px] font-medium text-gray-500 mb-1">Amazon経費</div>
+            <div class="flex items-center gap-3 text-xs text-gray-600" id="modal-cost-breakdown">
+              <span>転送: <span class="font-semibold" id="modal-forwarding-cost">-</span></span>
+              <span>利用料: <span class="font-semibold">¥100</span></span>
+              <span>販売手数料: <span class="font-semibold" id="modal-fee-pct">-</span></span>
+            </div>
           </div>
-          <div class="text-center">
-            <div class="text-[10px] text-gray-500">Amazon相場</div>
-            <div class="text-sm font-bold text-purple-700" id="modal-sell-price"></div>
-          </div>
-          <div class="text-center">
-            <div class="text-[10px] text-gray-500">出品価格</div>
-            <input type="number" id="modal-list-price" class="w-full text-sm font-bold text-green-700 text-center border rounded px-1 py-0.5">
+          <!-- Row 3: 販売 -->
+          <div class="border-t pt-2">
+            <div class="flex items-center gap-3">
+              <div>
+                <div class="text-[10px] text-gray-500">Amazon相場</div>
+                <div class="text-sm font-bold text-purple-700" id="modal-sell-price"></div>
+              </div>
+              <span class="text-gray-400 text-lg">&rarr;</span>
+              <div>
+                <div class="text-[10px] text-gray-500">出品価格</div>
+                <input type="number" id="modal-list-price" class="w-20 text-sm font-bold text-green-700 text-center border rounded px-1 py-0.5"
+                       oninput="_calcAndShowProfit()">
+              </div>
+              <div class="flex-1 text-right" id="modal-profit-display"></div>
+            </div>
           </div>
         </div>
-        <div class="text-xs text-gray-500 text-center -mt-2" id="modal-total-cost"></div>
+
+        <!-- Listing presets (per ASIN) -->
+        <div id="preset-section" class="hidden">
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">前回の出品設定</label>
+          <div id="preset-list" class="flex flex-col gap-1 max-h-40 overflow-y-auto"></div>
+        </div>
 
         <!-- Condition selector -->
         <div>
@@ -350,6 +340,25 @@
             <label class="flex items-center gap-2 p-2.5 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors">
               <input type="radio" name="condition" value="used_acceptable" class="text-blue-600">
               <div><div class="text-sm font-medium">可</div><div class="text-[10px] text-gray-400">Acceptable</div></div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Shipping pattern selector -->
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">発送までの日数</label>
+          <div class="grid grid-cols-3 gap-2" id="shipping-grid">
+            <label class="flex items-center gap-2 p-2.5 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors">
+              <input type="radio" name="shipping_pattern" value="1_2_days" class="text-blue-600">
+              <div><div class="text-sm font-medium">1〜2日</div><div class="text-[10px] text-gray-400">リードタイム4日</div></div>
+            </label>
+            <label class="flex items-center gap-2 p-2.5 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors border-blue-500 bg-blue-50">
+              <input type="radio" name="shipping_pattern" value="2_3_days" checked class="text-blue-600">
+              <div><div class="text-sm font-medium">2〜3日</div><div class="text-[10px] text-gray-400">リードタイム6日</div></div>
+            </label>
+            <label class="flex items-center gap-2 p-2.5 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors">
+              <input type="radio" name="shipping_pattern" value="3_7_days" class="text-blue-600">
+              <div><div class="text-sm font-medium">3〜7日</div><div class="text-[10px] text-gray-400">リードタイム9日</div></div>
             </label>
           </div>
         </div>
@@ -482,32 +491,6 @@ async function triggerDiscovery() {
     msgEl.className = 'text-xs mt-2 text-red-600';
     btn.textContent = '手動実行';
     btn.disabled = false;
-  }
-}
-
-async function approveCandidate(id) {
-  const row = document.getElementById('candidate-row-' + id);
-  try {
-    const resp = await fetch('/api/discovery/candidates/' + id + '/approve', {method: 'POST'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
-    row.style.opacity = '0.5';
-    row.querySelector('.flex-shrink-0').innerHTML = '<span class="text-xs text-green-600">承認済み</span>';
-    setTimeout(() => window.location.reload(), 1000);
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-async function rejectCandidate(id) {
-  const row = document.getElementById('candidate-row-' + id);
-  try {
-    const resp = await fetch('/api/discovery/candidates/' + id + '/reject', {method: 'POST'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
-    row.style.opacity = '0.5';
-    row.querySelector('.flex-shrink-0').innerHTML = '<span class="text-xs text-gray-400">却下済み</span>';
-    setTimeout(() => window.location.reload(), 1000);
-  } catch (e) {
-    alert(e.message);
   }
 }
 
@@ -764,8 +747,48 @@ function _submitOtherReject(alertId, btn) {
   rejectAlert(alertId, 'other', btn, note || '');
 }
 
-function openListingModal(alertId, auctionId, asin, title, yahooPrice, yahooShipping, sellPrice) {
+// Profit calculation state
+let _profitParams = {};
+
+function _calcAndShowProfit() {
+  const p = _profitParams;
+  const listPrice = parseInt(document.getElementById('modal-list-price').value) || 0;
+  const el = document.getElementById('modal-profit-display');
+  if (!listPrice || !p.yahooPrice) { el.textContent = ''; return; }
+
+  const amazonFee = Math.round(listPrice * p.feePct / 100);
+  const totalCost = p.yahooPrice + p.yahooShipping + p.forwardingCost + 100;  // 100 = system fee
+  const profit = listPrice - totalCost - amazonFee;
+  const marginPct = listPrice > 0 ? (profit / listPrice * 100).toFixed(1) : 0;
+
+  const color = profit > 0 ? 'text-green-700' : 'text-red-600';
+  el.className = 'text-sm font-bold text-right ' + color;
+  el.innerHTML = '粗利 ¥' + profit.toLocaleString() + '<div class="text-[10px] font-normal text-gray-400">' + marginPct + '%</div>';
+}
+
+async function openListingModal(alertId, auctionId, asin, title, yahooPrice, yahooShipping, sellPrice, feePct, forwardingCost) {
+  // 事前チェック: 既にAmazon出品済みか確認
+  try {
+    const resp = await fetch('/api/items/' + auctionId);
+    if (resp.ok) {
+      const item = await resp.json();
+      if (item.amazon_sku) {
+        alert('この商品は既にAmazonに出品済みです（SKU: ' + item.amazon_sku + '）');
+        return;
+      }
+    }
+  } catch (_) { /* MonitoredItem未登録 = 初回出品 → OK */ }
+
   currentAlertId = alertId;
+
+  // Store params for profit calculation
+  _profitParams = {
+    yahooPrice: yahooPrice,
+    yahooShipping: yahooShipping || 0,
+    feePct: feePct || 10.0,
+    forwardingCost: forwardingCost || 0,
+  };
+
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-asin').textContent = asin;
   document.getElementById('modal-yahoo-price').textContent = '¥' + yahooPrice.toLocaleString();
@@ -774,8 +797,12 @@ function openListingModal(alertId, auctionId, asin, title, yahooPrice, yahooShip
   document.getElementById('modal-list-price').value = sellPrice;
   const totalCost = yahooPrice + (yahooShipping || 0);
   document.getElementById('modal-total-cost').textContent = yahooShipping > 0
-    ? '仕入れ総額: ¥' + totalCost.toLocaleString() + ' (即決 + 送料)'
-    : '※送料は地域によって異なります。Yahoo出品ページで確認してください';
+    ? '小計 ¥' + totalCost.toLocaleString()
+    : '※送料は地域によって異なります';
+
+  // Display Amazon cost breakdown
+  document.getElementById('modal-forwarding-cost').textContent = '¥' + (forwardingCost || 0).toLocaleString();
+  document.getElementById('modal-fee-pct').textContent = (feePct || 10) + '%';
 
   // Set images
   const alertRow = document.getElementById('alert-row-' + alertId);
@@ -792,6 +819,14 @@ function openListingModal(alertId, auctionId, asin, title, yahooPrice, yahooShip
   radios.forEach(r => { r.checked = r.value === 'used_very_good'; });
   updateConditionHighlight();
 
+  // Reset shipping pattern to default
+  document.querySelectorAll('input[name="shipping_pattern"]').forEach(r => {
+    r.checked = r.value === '2_3_days';
+    const label = r.closest('label');
+    if (r.checked) { label.classList.add('border-blue-500', 'bg-blue-50'); }
+    else { label.classList.remove('border-blue-500', 'bg-blue-50'); }
+  });
+
   // Reset messages
   document.getElementById('modal-msg').textContent = '';
   document.getElementById('modal-template-msg').textContent = '';
@@ -801,10 +836,28 @@ function openListingModal(alertId, auctionId, asin, title, yahooPrice, yahooShip
   // Load Yahoo images for this alert
   _loadModalImages(alertId);
 
-  // Load condition templates and apply current condition
-  _loadTemplates().then(() => {
+  // Load ASIN presets first, then condition templates as fallback
+  await _loadPresets(asin);
+
+  // Load condition templates and apply current condition,
+  // but only if no preset was auto-applied
+  if (!document.getElementById('preset-section').dataset.applied) {
+    await _loadTemplates();
     _applyTemplate(document.querySelector('input[name="condition"]:checked').value);
-  });
+    // Check if MonitoredItem has a saved condition_note
+    try {
+      const resp = await fetch('/api/items/' + auctionId);
+      if (resp.ok) {
+        const item = await resp.json();
+        if (item.amazon_condition_note) {
+          document.getElementById('modal-condition-note').value = item.amazon_condition_note;
+        }
+      }
+    } catch (_) { /* ignore — first-time listing */ }
+  }
+
+  // Calculate initial profit
+  _calcAndShowProfit();
 
   document.getElementById('listing-modal').classList.remove('hidden');
 }
@@ -840,7 +893,8 @@ async function submitListing() {
   msgEl.textContent = '';
 
   try {
-    const body = {condition, price};
+    const shippingPattern = document.querySelector('input[name="shipping_pattern"]:checked').value;
+    const body = {condition, price, shipping_pattern: shippingPattern};
     if (conditionNote) body.condition_note = conditionNote;
     if (imageUrls.length > 0) body.image_urls = imageUrls;
 
@@ -851,6 +905,21 @@ async function submitListing() {
     });
     const data = await resp.json();
     if (!resp.ok) { throw new Error(data.detail || 'Failed'); }
+
+    // Auto-save listing preset (fire-and-forget)
+    const presetAsin = document.getElementById('modal-asin').textContent.trim();
+    if (presetAsin) {
+      fetch('/api/presets', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          asin: presetAsin,
+          condition: condition,
+          condition_note: conditionNote || '',
+          shipping_pattern: shippingPattern,
+        }),
+      }).catch(() => {});
+    }
 
     msgEl.textContent = 'Amazon出品完了！ SKU: ' + data.amazon_sku;
     msgEl.className = 'text-xs text-green-600 font-medium';
@@ -995,6 +1064,94 @@ async function saveCurrentTemplate() {
   }
 }
 
+// --- ASIN Listing Presets ---
+const _conditionLabels = {
+  'used_like_new': 'ほぼ新品',
+  'used_very_good': '非常に良い',
+  'used_good': '良い',
+  'used_acceptable': '可',
+};
+const _shippingLabels = {
+  '1_2_days': '1〜2日',
+  '2_3_days': '2〜3日',
+  '3_7_days': '3〜7日',
+};
+
+async function _loadPresets(asin) {
+  const section = document.getElementById('preset-section');
+  const list = document.getElementById('preset-list');
+  section.classList.add('hidden');
+  section.dataset.applied = '';
+  list.innerHTML = '';
+
+  if (!asin) return;
+
+  try {
+    const resp = await fetch('/api/presets/' + encodeURIComponent(asin));
+    if (!resp.ok) return;
+    const presets = await resp.json();
+    if (!presets || presets.length === 0) return;
+
+    presets.forEach((p, idx) => {
+      const notePreview = p.condition_note
+        ? (p.condition_note.length > 35 ? p.condition_note.substring(0, 35) + '…' : p.condition_note)
+        : '（説明文なし）';
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'w-full text-left px-3 py-2 border rounded-lg text-xs hover:bg-indigo-50 hover:border-indigo-400 transition-colors ' +
+        (idx === 0 ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200');
+      card.innerHTML =
+        '<span class="font-medium text-indigo-700">' + (_conditionLabels[p.condition] || p.condition) + '</span>' +
+        '<span class="text-gray-400 mx-1">|</span>' +
+        '<span class="text-gray-600">' + notePreview + '</span>' +
+        '<span class="text-gray-400 mx-1">|</span>' +
+        '<span class="text-gray-500">' + (_shippingLabels[p.shipping_pattern] || p.shipping_pattern) + '</span>';
+      card.onclick = () => { _applyPreset(p); _highlightPresetCard(card); };
+      list.appendChild(card);
+    });
+
+    section.classList.remove('hidden');
+
+    // Auto-apply first (newest) preset
+    _applyPreset(presets[0]);
+    _highlightPresetCard(list.firstChild);
+    section.dataset.applied = '1';
+  } catch (_) { /* ignore preset load errors */ }
+}
+
+function _applyPreset(preset) {
+  // Set condition radio
+  const condRadio = document.querySelector('input[name="condition"][value="' + preset.condition + '"]');
+  if (condRadio) {
+    condRadio.checked = true;
+    updateConditionHighlight();
+  }
+
+  // Set condition note
+  document.getElementById('modal-condition-note').value = preset.condition_note || '';
+
+  // Set shipping pattern radio
+  const shipRadio = document.querySelector('input[name="shipping_pattern"][value="' + preset.shipping_pattern + '"]');
+  if (shipRadio) {
+    shipRadio.checked = true;
+    document.querySelectorAll('#shipping-grid label').forEach(label => {
+      const r = label.querySelector('input[type="radio"]');
+      if (r.checked) { label.classList.add('border-blue-500', 'bg-blue-50'); }
+      else { label.classList.remove('border-blue-500', 'bg-blue-50'); }
+    });
+  }
+
+}
+
+function _highlightPresetCard(activeCard) {
+  document.querySelectorAll('#preset-list button').forEach(btn => {
+    btn.classList.remove('border-indigo-400', 'bg-indigo-50');
+    btn.classList.add('border-gray-200');
+  });
+  activeCard.classList.add('border-indigo-400', 'bg-indigo-50');
+  activeCard.classList.remove('border-gray-200');
+}
+
 // Condition radio highlight
 function updateConditionHighlight() {
   document.querySelectorAll('#condition-grid label').forEach(label => {
@@ -1011,6 +1168,21 @@ document.querySelectorAll('input[name="condition"]').forEach(r => {
     updateConditionHighlight();
     _applyTemplate(r.value);
   });
+});
+
+// Shipping pattern highlight
+function updateShippingHighlight() {
+  document.querySelectorAll('#shipping-grid label').forEach(label => {
+    const radio = label.querySelector('input[type="radio"]');
+    if (radio.checked) {
+      label.classList.add('border-blue-500', 'bg-blue-50');
+    } else {
+      label.classList.remove('border-blue-500', 'bg-blue-50');
+    }
+  });
+}
+document.querySelectorAll('input[name="shipping_pattern"]').forEach(r => {
+  r.addEventListener('change', updateShippingHighlight);
 });
 
 // Close modal on Escape key

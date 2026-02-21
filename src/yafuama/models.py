@@ -48,11 +48,15 @@ class MonitoredItem(Base):
     amazon_listing_status: Mapped[str | None] = mapped_column(Text, nullable=True)  # active / inactive / error
     amazon_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     estimated_win_price: Mapped[int] = mapped_column(Integer, default=0)
-    shipping_cost: Mapped[int] = mapped_column(Integer, default=0)
+    shipping_cost: Mapped[int] = mapped_column(Integer, default=0)  # Yahoo送料
+    forwarding_cost: Mapped[int] = mapped_column(Integer, default=0)  # 転送費
+    amazon_fee_pct: Mapped[float] = mapped_column(Float, default=10.0)  # Amazon販売手数料率
     amazon_margin_pct: Mapped[float] = mapped_column(Float, default=15.0)
     amazon_lead_time_days: Mapped[int] = mapped_column(Integer, default=4)  # lead_time_to_ship_max_days
     amazon_shipping_pattern: Mapped[str] = mapped_column(Text, default="2_3_days")
+    amazon_condition_note: Mapped[str] = mapped_column(Text, default="")  # ユーザー編集済みコンディション説明
     amazon_last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    seller_central_checklist: Mapped[str] = mapped_column(Text, default="")  # JSON: {"lead_time":false,"images":false,"condition":false}
 
     history: Mapped[list["StatusHistory"]] = relationship(back_populates="item", cascade="all, delete-orphan")
     notifications: Mapped[list["NotificationLog"]] = relationship(back_populates="item", cascade="all, delete-orphan")
@@ -113,6 +117,7 @@ class WatchedKeyword(Base):
     total_scans: Mapped[int] = mapped_column(Integer, default=0)
     total_deals_found: Mapped[int] = mapped_column(Integer, default=0)
     total_gross_profit: Mapped[int] = mapped_column(Integer, default=0)
+    scans_since_last_deal: Mapped[int] = mapped_column(Integer, default=0)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     auto_deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -138,6 +143,9 @@ class DealAlert(Base):
     sell_price: Mapped[int] = mapped_column(Integer, default=0)
     gross_profit: Mapped[int] = mapped_column(Integer, default=0)
     gross_margin_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    # Cost breakdown for profit recalculation
+    amazon_fee_pct: Mapped[float] = mapped_column(Float, default=10.0)
+    forwarding_cost: Mapped[int] = mapped_column(Integer, default=0)
     notified_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Rejection feedback
     status: Mapped[str] = mapped_column(Text, default="active")  # active / rejected
@@ -195,6 +203,17 @@ class ConditionTemplate(Base):
     title: Mapped[str] = mapped_column(Text, default="")
     body: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class ListingPreset(Base):
+    __tablename__ = "listing_presets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asin: Mapped[str] = mapped_column(Text, index=True)
+    condition: Mapped[str] = mapped_column(Text)
+    condition_note: Mapped[str] = mapped_column(Text, default="")
+    shipping_pattern: Mapped[str] = mapped_column(Text, default="2_3_days")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class RejectionPattern(Base):

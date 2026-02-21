@@ -155,6 +155,18 @@ async def delete_item(auction_id: str, db: Session = Depends(get_db)):
     db.commit()
 
 
+@router.get("/{auction_id}/images")
+async def get_item_images(auction_id: str, db: Session = Depends(get_db)):
+    """Fetch all product images from the Yahoo auction page for this item."""
+    item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
+    if not item:
+        raise HTTPException(404, f"Item {auction_id} not found")
+
+    scraper = _get_scraper()
+    images = await scraper.fetch_auction_images(auction_id)
+    return {"images": images, "auction_id": auction_id}
+
+
 @router.post("/{auction_id}/refresh", response_model=ItemResponse)
 async def refresh_item(auction_id: str, db: Session = Depends(get_db)):
     item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
@@ -190,3 +202,37 @@ async def refresh_item(auction_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(item)
     return item
+
+
+# --- Seller Central Checklist ---
+
+CHECKLIST_KEYS = ["lead_time", "images", "condition"]
+
+
+@router.patch("/{auction_id}/checklist")
+def update_checklist(auction_id: str, body: dict, db: Session = Depends(get_db)):
+    """Update seller central checklist for an item.
+
+    Expects: {"lead_time": true, "images": false, ...}
+    """
+    import json
+
+    item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
+    if not item:
+        raise HTTPException(404, f"Item {auction_id} not found")
+
+    # Load existing checklist
+    try:
+        checklist = json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
+    except (json.JSONDecodeError, TypeError):
+        checklist = {}
+
+    # Update only valid keys
+    for key in CHECKLIST_KEYS:
+        if key in body:
+            checklist[key] = bool(body[key])
+
+    item.seller_central_checklist = json.dumps(checklist)
+    item.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "checklist": checklist}

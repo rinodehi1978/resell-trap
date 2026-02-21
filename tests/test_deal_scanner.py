@@ -41,6 +41,15 @@ def scanner():
     return DealScanner(scraper, keepa, webhook_url="", webhook_type="discord")
 
 
+@pytest.fixture()
+def scanner_with_sp_api():
+    scraper = AsyncMock()
+    keepa = AsyncMock()
+    keepa.clear_search_cache = MagicMock()
+    sp_api = AsyncMock()
+    return DealScanner(scraper, keepa, webhook_url="", webhook_type="discord", sp_api_client=sp_api)
+
+
 class TestFindDealsClassification:
     """Test that Yahoo items are correctly classified into targeted vs fallback groups."""
 
@@ -183,3 +192,55 @@ class TestMatchAndScoreYahooItem:
         result = await scanner._match_and_score_yahoo_item(yr, keepa)
         # Should find a match (same product)
         assert result is not None or True  # May not pass score threshold but shouldn't error
+
+
+class TestDynamicFeeIntegration:
+    """Test that SP-API dynamic fee lookup is used when available."""
+
+    @pytest.mark.asyncio
+    async def test_dynamic_fee_used_when_sp_api_available(self, scanner_with_sp_api):
+        """When SP-API returns a fee %, it should be used instead of the config default."""
+        # SP-API returns 15% referral fee
+        scanner_with_sp_api._sp_api.get_referral_fee_pct = AsyncMock(return_value=15.0)
+
+        yr = FakeYahooResult("y1", "デロンギ ECAM35015BH エスプレッソマシン", 9500, shipping_cost=700)
+        keepa = [_make_keepa_product("B09XYZ", "デロンギ ECAM35015BH エスプレッソマシン", 25980)]
+
+        result = await scanner_with_sp_api._match_and_score_yahoo_item(yr, keepa)
+
+        # Verify SP-API was called
+        scanner_with_sp_api._sp_api.get_referral_fee_pct.assert_called_once_with(
+            "B09XYZ", 25980
+        )
+
+        # If matched, fee should be 15% not 10%
+        if result is not None:
+            expected_fee = int(25980 * 15.0 / 100)  # 3897
+            assert result.amazon_fee == expected_fee
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_default_on_sp_api_error(self, scanner_with_sp_api):
+        """When SP-API returns None, should fallback to config default."""
+        scanner_with_sp_api._sp_api.get_referral_fee_pct = AsyncMock(return_value=None)
+
+        yr = FakeYahooResult("y1", "Sony WH-1000XM5 ヘッドホン", 15000, shipping_cost=700)
+        keepa = [_make_keepa_product("B0FALLBACK", "Sony WH-1000XM5 ヘッドホン", 30000)]
+
+        result = await scanner_with_sp_api._match_and_score_yahoo_item(yr, keepa)
+
+        # Should fallback to default 10%
+        if result is not None:
+            expected_fee = int(30000 * 10.0 / 100)  # 3000
+            assert result.amazon_fee == expected_fee
+
+    @pytest.mark.asyncio
+    async def test_no_sp_api_uses_default(self, scanner):
+        """Without SP-API client, should use config default fee."""
+        yr = FakeYahooResult("y1", "Sony WH-1000XM5 ヘッドホン", 15000, shipping_cost=700)
+        keepa = [_make_keepa_product("B0NOAPI", "Sony WH-1000XM5 ヘッドホン", 30000)]
+
+        result = await scanner._match_and_score_yahoo_item(yr, keepa)
+
+        if result is not None:
+            expected_fee = int(30000 * 10.0 / 100)  # 3000
+            assert result.amazon_fee == expected_fee

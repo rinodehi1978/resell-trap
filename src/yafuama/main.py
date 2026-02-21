@@ -74,6 +74,7 @@ async def lifespan(app: FastAPI):
             scraper, keepa_client,
             webhook_url=settings.webhook_url,
             webhook_type=settings.webhook_type,
+            sp_api_client=app_state.get("sp_api"),
         )
         app_state["deal_scanner"] = deal_scanner
         scheduler.add_deal_scan_job(deal_scanner, settings.deal_scan_interval)
@@ -90,6 +91,14 @@ async def lifespan(app: FastAPI):
             app_state["discovery_engine"] = discovery_engine
             scheduler.add_discovery_job(discovery_engine, settings.discovery_interval)
             logger.info("AI Discovery engine enabled (interval=%ds)", settings.discovery_interval)
+
+    # Amazon listing sync (detect deletions from Seller Central)
+    if "sp_api" in app_state:
+        from .amazon.listing_sync import ListingSyncChecker
+
+        listing_checker = ListingSyncChecker(app_state["sp_api"])
+        scheduler.add_listing_sync_job(listing_checker, 3600)  # 1時間ごと
+        logger.info("Amazon listing sync enabled (interval=3600s)")
 
     # Load matcher overrides from rejection patterns
     try:

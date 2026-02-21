@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import amazon, discovery, items, keepa, keywords, search, status, system, templates
+from . import amazon, discovery, items, keepa, keywords, presets, search, status, system, templates
 
 api_router = APIRouter()
 api_router.include_router(items.router)
@@ -14,3 +14,4 @@ api_router.include_router(keepa.router)
 api_router.include_router(keywords.router)
 api_router.include_router(discovery.router)
 api_router.include_router(templates.router)
+api_router.include_router(presets.router)

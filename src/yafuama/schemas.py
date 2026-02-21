@@ -54,6 +54,7 @@ class ItemResponse(BaseModel):
     amazon_margin_pct: float = 15.0
     amazon_lead_time_days: int = 4
     amazon_shipping_pattern: str = "2_3_days"
+    amazon_condition_note: str = ""
     amazon_last_synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
@@ -188,6 +189,8 @@ class AmazonListingCreate(BaseModel):
     margin_pct: float | None = None
     lead_time_days: int = 4  # Amazon lead_time_to_ship_max_days (days)
     shipping_pattern: str = "2_3_days"  # "1_2_days" / "2_3_days" / "3_7_days"
+    image_urls: list[str] = []  # Selected Yahoo auction image URLs
+    condition_note: str = ""  # コンディション説明（中古品向け）
 
 
 class AmazonListingUpdate(BaseModel):
@@ -211,6 +214,7 @@ class AmazonListingResponse(BaseModel):
     amazon_margin_pct: float
     amazon_lead_time_days: int = 4
     amazon_shipping_pattern: str = "2_3_days"
+    amazon_condition_note: str = ""
     amazon_last_synced_at: datetime | None
 
     model_config = {"from_attributes": True}

@@ -10,53 +10,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from yafuama.ai.generator import CandidateProposal
-from yafuama.ai.validator import ValidationResult, should_auto_add
+from yafuama.ai.validator import ValidationResult
 from yafuama.database import Base, get_db
 from yafuama.main import app, app_state
 from yafuama.models import DealAlert, DiscoveryLog, KeywordCandidate, WatchedKeyword
 
 
 # --- Validator tests ---
-
-
-class TestShouldAutoAdd:
-    def test_auto_add_when_all_conditions_met(self):
-        proposal = CandidateProposal(
-            keyword="test", strategy="brand", confidence=0.7,
-            parent_keyword_id=None, reasoning="test",
-        )
-        result = ValidationResult(
-            is_valid=True, potential_deals=3, best_profit=6000,
-        )
-        assert should_auto_add(proposal, result, threshold=0.6) is True
-
-    def test_no_auto_add_low_confidence(self):
-        proposal = CandidateProposal(
-            keyword="test", strategy="brand", confidence=0.4,
-            parent_keyword_id=None, reasoning="test",
-        )
-        result = ValidationResult(
-            is_valid=True, potential_deals=3, best_profit=6000,
-        )
-        assert should_auto_add(proposal, result, threshold=0.6) is False
-
-    def test_no_auto_add_low_profit(self):
-        proposal = CandidateProposal(
-            keyword="test", strategy="brand", confidence=0.7,
-            parent_keyword_id=None, reasoning="test",
-        )
-        result = ValidationResult(
-            is_valid=True, potential_deals=3, best_profit=3000,
-        )
-        assert should_auto_add(proposal, result, threshold=0.6) is False
-
-    def test_no_auto_add_invalid(self):
-        proposal = CandidateProposal(
-            keyword="test", strategy="brand", confidence=0.7,
-            parent_keyword_id=None, reasoning="test",
-        )
-        result = ValidationResult(is_valid=False)
-        assert should_auto_add(proposal, result, threshold=0.6) is False
 
 
 class TestValidationResult:

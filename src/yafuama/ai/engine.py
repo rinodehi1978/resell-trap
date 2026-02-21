@@ -14,7 +14,7 @@ from ..models import DealAlert, DiscoveryLog, KeywordCandidate, WatchedKeyword
 from .analyzer import analyze_deal_history, compute_performance_score
 from .generator import generate_all
 from .llm import get_llm_suggestions
-from .validator import ValidationResult, should_auto_add, validate_candidate
+from .validator import ValidationResult, validate_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -135,13 +135,9 @@ class DiscoveryEngine:
                     kc.resolved_at = datetime.now(timezone.utc)
 
                     if vresult.is_valid:
-                        # 4. Register: auto-add or mark as validated
-                        if should_auto_add(proposal, vresult, settings.discovery_auto_add_threshold):
-                            self._register_keyword(kc, db)
-                            kc.status = "auto_added"
-                            result.keywords_added += 1
-                        else:
-                            kc.status = "validated"
+                        self._register_keyword(kc, db)
+                        kc.status = "auto_added"
+                        result.keywords_added += 1
                     else:
                         kc.status = "rejected"
 
@@ -336,21 +332,19 @@ class DiscoveryEngine:
             alerts = kw.alerts
             kw.performance_score = compute_performance_score(kw, alerts)
 
-            # Auto-deactivate underperforming AI keywords
+            # Auto-delete underperforming AI keywords
             if (
                 kw.source != "manual"
                 and kw.is_active
-                and kw.auto_deactivated_at is None
                 and kw.total_scans >= settings.discovery_deactivation_scans
                 and kw.performance_score < settings.discovery_deactivation_threshold
             ):
-                kw.is_active = False
-                kw.auto_deactivated_at = datetime.now(timezone.utc)
-                deactivated += 1
                 logger.info(
-                    "Auto-deactivated AI keyword: %s (score=%.3f, scans=%d)",
+                    "Auto-deleting AI keyword: %s (score=%.3f, scans=%d)",
                     kw.keyword, kw.performance_score, kw.total_scans,
                 )
+                db.delete(kw)
+                deactivated += 1
 
         return deactivated
 

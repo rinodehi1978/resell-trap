@@ -28,6 +28,7 @@ def _make_item(**kwargs):
         amazon_sku="YAHOO-1219987808",
         amazon_listing_status="active",
         amazon_last_synced_at=None,
+        updated_at=None,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -46,7 +47,7 @@ def _make_change(**kwargs):
 @pytest.fixture()
 def mock_client():
     client = AsyncMock()
-    client.patch_listing_quantity = AsyncMock(return_value={})
+    client.delete_listing = AsyncMock(return_value={})
     return client
 
 
@@ -57,30 +58,32 @@ def notifier(mock_client):
 
 class TestAmazonNotifier:
     @pytest.mark.asyncio
-    async def test_ended_sets_quantity_zero(self, notifier, mock_client):
+    async def test_ended_deletes_listing(self, notifier, mock_client):
         item = _make_item()
         change = _make_change(new_status="ended_sold")
         result = await notifier.notify(item, change)
         assert result is True
-        mock_client.patch_listing_quantity.assert_called_once_with("TEST_SELLER", "YAHOO-1219987808", 0)
-        assert item.amazon_listing_status == "inactive"
+        mock_client.delete_listing.assert_called_once_with("TEST_SELLER", "YAHOO-1219987808")
+        assert item.amazon_sku is None
+        assert item.amazon_listing_status == "delisted"
 
     @pytest.mark.asyncio
-    async def test_ended_no_winner(self, notifier, mock_client):
+    async def test_ended_no_winner_deletes_listing(self, notifier, mock_client):
         item = _make_item()
         change = _make_change(new_status="ended_no_winner")
         result = await notifier.notify(item, change)
         assert result is True
-        mock_client.patch_listing_quantity.assert_called_once_with("TEST_SELLER", "YAHOO-1219987808", 0)
+        mock_client.delete_listing.assert_called_once_with("TEST_SELLER", "YAHOO-1219987808")
+        assert item.amazon_sku is None
+        assert item.amazon_listing_status == "delisted"
 
     @pytest.mark.asyncio
-    async def test_active_sets_quantity_one(self, notifier, mock_client):
-        item = _make_item(amazon_listing_status="inactive")
+    async def test_non_ended_status_ignored(self, notifier, mock_client):
+        item = _make_item(amazon_listing_status="active")
         change = _make_change(old_status="ended_no_winner", new_status="active")
         result = await notifier.notify(item, change)
         assert result is True
-        mock_client.patch_listing_quantity.assert_called_once_with("TEST_SELLER", "YAHOO-1219987808", 1)
-        assert item.amazon_listing_status == "active"
+        mock_client.delete_listing.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_skip_no_sku(self, notifier, mock_client):
@@ -88,7 +91,7 @@ class TestAmazonNotifier:
         change = _make_change(new_status="ended_sold")
         result = await notifier.notify(item, change)
         assert result is True
-        mock_client.patch_listing_quantity.assert_not_called()
+        mock_client.delete_listing.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_skip_non_status_change(self, notifier, mock_client):
@@ -96,11 +99,11 @@ class TestAmazonNotifier:
         change = _make_change(change_type="price_change")
         result = await notifier.notify(item, change)
         assert result is True
-        mock_client.patch_listing_quantity.assert_not_called()
+        mock_client.delete_listing.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_api_error_returns_false(self, notifier, mock_client):
-        mock_client.patch_listing_quantity.side_effect = AmazonApiError("rate limit", 429)
+        mock_client.delete_listing.side_effect = AmazonApiError("rate limit", 429)
         item = _make_item()
         change = _make_change(new_status="ended_sold")
         result = await notifier.notify(item, change)
@@ -108,13 +111,12 @@ class TestAmazonNotifier:
         assert item.amazon_listing_status == "error"
 
     @pytest.mark.asyncio
-    async def test_last_synced_updated(self, notifier, mock_client):
-        item = _make_item(amazon_last_synced_at=None)
+    async def test_sku_cleared_after_delete(self, notifier, mock_client):
+        item = _make_item(amazon_last_synced_at=datetime.now(timezone.utc))
         change = _make_change(new_status="ended_sold")
-        before = datetime.now(timezone.utc)
         await notifier.notify(item, change)
-        assert item.amazon_last_synced_at is not None
-        assert item.amazon_last_synced_at >= before
+        assert item.amazon_sku is None
+        assert item.amazon_last_synced_at is None
 
     def test_format_message_with_sku(self, notifier):
         item = _make_item()

@@ -35,10 +35,11 @@ VALID_SHIPPING_PATTERN_KEYS = ("1_2_days", "2_3_days", "3_7_days")
 
 
 def get_shipping_patterns() -> list[ShippingPattern]:
+    tid = settings.shipping_template_id
     return [
-        ShippingPattern("1_2_days", "1〜2日で発送", 4, settings.shipping_template_1_2_days),
-        ShippingPattern("2_3_days", "2〜3日で発送", 6, settings.shipping_template_2_3_days),
-        ShippingPattern("3_7_days", "3〜7日で発送", 9, settings.shipping_template_3_7_days),
+        ShippingPattern("1_2_days", "1〜2日で発送", 4, tid),
+        ShippingPattern("2_3_days", "2〜3日で発送", 6, tid),
+        ShippingPattern("3_7_days", "3〜7日で発送", 9, tid),
     ]
 
 

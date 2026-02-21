@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from functools import partial
 from typing import Any
 
-from sp_api.api import CatalogItems, ListingsItems, ListingsRestrictions
+from sp_api.api import CatalogItems, ListingsItems, ListingsRestrictions, ProductFees
 from sp_api.base import Marketplaces, SellingApiException
 
 from ..config import settings
@@ -30,6 +31,8 @@ class SpApiClient:
         }
         self._marketplace = Marketplaces.JP
         self._marketplace_id = settings.sp_api_marketplace
+        self._fee_cache: dict[str, float] = {}  # ASIN → referral fee %
+        self._last_fee_request_at: float = 0.0
 
     async def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
         loop = asyncio.get_event_loop()
@@ -57,6 +60,12 @@ class SpApiClient:
             marketplace=self._marketplace,
         )
 
+    def _fees_api(self) -> ProductFees:
+        return ProductFees(
+            credentials=self._credentials,
+            marketplace=self._marketplace,
+        )
+
     # --- Catalog ---
 
     async def get_catalog_item(self, asin: str) -> dict:
@@ -67,6 +76,28 @@ class SpApiClient:
             marketplaceIds=[self._marketplace_id],
             includedData=["summaries", "images", "salesRanks"],
         )
+
+    async def get_product_type(self, asin: str) -> str:
+        """Get the Amazon product type for an ASIN (e.g. 'SPACE_HEATER').
+
+        Falls back to 'PRODUCT' if lookup fails.
+        """
+        try:
+            api = self._catalog_api()
+            result = await self._call(
+                api.get_catalog_item,
+                asin=asin,
+                marketplaceIds=[self._marketplace_id],
+                includedData=["productTypes"],
+            )
+            product_types = result.get("productTypes", []) if isinstance(result, dict) else []
+            for pt in product_types:
+                if pt.get("productType"):
+                    logger.debug("ASIN %s productType: %s", asin, pt["productType"])
+                    return pt["productType"]
+        except AmazonApiError as e:
+            logger.warning("Failed to get productType for ASIN %s: %s", asin, e)
+        return "PRODUCT"
 
     async def search_catalog_items(self, keywords: str, page_size: int = 10) -> list[dict]:
         api = self._catalog_api()
@@ -82,17 +113,43 @@ class SpApiClient:
     # --- Listings ---
 
     async def create_listing(
-        self, seller_id: str, sku: str, product_type: str, attributes: dict
+        self, seller_id: str, sku: str, product_type: str, attributes: dict,
+        *, offer_only: bool = False,
     ) -> dict:
         api = self._listings_api()
         body = {"productType": product_type, "attributes": attributes}
-        return await self._call(
-            api.put_listings_item,
-            sellerId=seller_id,
-            sku=sku,
-            marketplaceIds=[self._marketplace_id],
-            body=body,
+        if offer_only:
+            body["requirements"] = "LISTING_OFFER_ONLY"
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                partial(
+                    api.put_listings_item,
+                    sellerId=seller_id,
+                    sku=sku,
+                    marketplaceIds=[self._marketplace_id],
+                    body=body,
+                ),
+            )
+        except SellingApiException as e:
+            raise AmazonApiError(str(e), getattr(e, "status_code", None)) from e
+
+        payload = result.payload if hasattr(result, "payload") else result or {}
+        status = payload.get("status", "")
+        if status == "INVALID":
+            issues = payload.get("issues", [])
+            msgs = "; ".join(i.get("message", i.get("code", "")) for i in issues)
+            raise AmazonApiError(
+                f"Listing rejected (INVALID): {msgs or 'unknown error'}",
+            )
+
+        logger.info(
+            "Listing created: SKU=%s status=%s submissionId=%s",
+            sku, status, payload.get("submissionId", ""),
         )
+        return payload
+
 
     async def patch_listing_quantity(self, seller_id: str, sku: str, quantity: int) -> dict:
         api = self._listings_api()
@@ -206,3 +263,57 @@ class SpApiClient:
         if isinstance(result, dict):
             return result.get("restrictions", [])
         return []
+
+    # --- Product Fees ---
+
+    async def get_referral_fee_pct(self, asin: str, price: int) -> float | None:
+        """Get Amazon referral fee percentage for an ASIN.
+
+        Uses an in-memory cache (fee % is category-dependent and stable).
+        Rate-limited to 1 request/second per SP-API constraints.
+
+        Returns the fee percentage (e.g. 15.0 for 15%), or None on error.
+        """
+        if asin in self._fee_cache:
+            return self._fee_cache[asin]
+
+        if price <= 0:
+            return None
+
+        # Rate limiting: 1 req/sec
+        now = time.monotonic()
+        elapsed = now - self._last_fee_request_at
+        if elapsed < 1.0:
+            await asyncio.sleep(1.0 - elapsed)
+
+        try:
+            api = self._fees_api()
+            self._last_fee_request_at = time.monotonic()
+            result = await self._call(
+                api.get_product_fees_estimate_for_asin,
+                asin=asin,
+                price=float(price),
+                currency="JPY",
+                is_fba=False,
+            )
+        except AmazonApiError as e:
+            logger.warning("Fee estimate failed for ASIN %s: %s", asin, e)
+            return None
+
+        # Extract referral fee from response
+        try:
+            fees_estimate = result.get("FeesEstimateResult", {}).get("FeesEstimate", {})
+            for fee in fees_estimate.get("FeeDetailList", []):
+                if fee.get("FeeType") == "ReferralFee":
+                    fee_amount = float(fee["FeeAmount"]["Amount"])
+                    fee_pct = round(fee_amount / price * 100, 1)
+                    self._fee_cache[asin] = fee_pct
+                    logger.debug(
+                        "ASIN %s referral fee: %.1f%% (¥%d on ¥%d)",
+                        asin, fee_pct, fee_amount, price,
+                    )
+                    return fee_pct
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("Failed to parse fee response for ASIN %s: %s", asin, e)
+
+        return None

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
@@ -72,6 +72,17 @@ class MonitorScheduler:
         )
         logger.info("AI Discovery job registered (interval=%ds)", interval_seconds)
 
+    def add_listing_sync_job(self, checker, interval_seconds: int) -> None:
+        """Register the Amazon listing sync checker as a periodic job."""
+        self._scheduler.add_job(
+            checker.check_all,
+            "interval",
+            seconds=interval_seconds,
+            id="listing_sync",
+            replace_existing=True,
+        )
+        logger.info("Listing sync job registered (interval=%ds)", interval_seconds)
+
     def shutdown(self) -> None:
         self._scheduler.shutdown(wait=False)
         self.running = False
@@ -96,6 +107,9 @@ class MonitorScheduler:
                 if item.last_checked_at and (now - item.last_checked_at).total_seconds() < interval:
                     continue
                 await self._check_item(item, db)
+
+            # Auto-cleanup ended items (3 days after ending)
+            self._cleanup_ended_items(db, now)
 
             db.commit()
         except Exception as e:
@@ -153,6 +167,8 @@ class MonitorScheduler:
         for notifier in self.notifiers:
             channel = type(notifier).__name__
             try:
+                # Amazon SKUを記録（notifier内でクリアされる前に保存）
+                sku_before = item.amazon_sku
                 success = await notifier.notify(item, change)
                 event_type = self._event_type(change)
                 db.add(NotificationLog(
@@ -162,6 +178,20 @@ class MonitorScheduler:
                     message=notifier.format_message(item, change),
                     success=success,
                 ))
+                # AmazonNotifierがSKUをクリアした場合、取り下げ履歴を記録
+                if sku_before and not item.amazon_sku and item.amazon_listing_status == "delisted":
+                    db.add(StatusHistory(
+                        item_id=item.id, auction_id=item.auction_id,
+                        change_type="amazon_delist_auto",
+                        old_status=sku_before,
+                    ))
+                elif sku_before and item.amazon_listing_status == "error":
+                    db.add(StatusHistory(
+                        item_id=item.id, auction_id=item.auction_id,
+                        change_type="amazon_error",
+                        old_status=sku_before,
+                        new_status="取り下げ失敗",
+                    ))
             except Exception as e:
                 logger.warning("Notifier %s failed: %s", channel, e)
                 db.add(NotificationLog(
@@ -199,3 +229,30 @@ class MonitorScheduler:
             return item.check_interval_seconds / 2
 
         return item.check_interval_seconds
+
+    @staticmethod
+    def _cleanup_ended_items(db: Session, now: datetime) -> None:
+        """Auto-delete ended MonitoredItems immediately.
+
+        Conditions for cleanup:
+        - Yahoo auction ended (status starts with 'ended_')
+        - Amazon listing is NOT active (already deactivated or never listed)
+        - Amazon listing is NOT in error state (needs manual attention)
+        """
+        stale = (
+            db.query(MonitoredItem)
+            .filter(
+                MonitoredItem.status.like("ended_%"),
+                MonitoredItem.amazon_listing_status != "active",
+                MonitoredItem.amazon_listing_status != "error",
+            )
+            .all()
+        )
+        if stale:
+            for item in stale:
+                logger.info(
+                    "Auto-cleanup: removing ended item %s (%s)",
+                    item.auction_id, item.status,
+                )
+                db.delete(item)
+            logger.info("Auto-cleanup: removed %d ended items", len(stale))

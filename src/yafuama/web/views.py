@@ -21,6 +21,24 @@ logger = logging.getLogger(__name__)
 _template_dir = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_template_dir))
 
+
+def _checklist_complete(item: MonitoredItem) -> bool | None:
+    """Return True if all checklist items checked, False if incomplete, None if N/A."""
+    import json as _json
+
+    if item.amazon_listing_status != "active":
+        return None
+    try:
+        cl = _json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
+    except (_json.JSONDecodeError, TypeError):
+        cl = {}
+    if not cl:
+        return False
+    return all(cl.get(k, False) for k in ("lead_time", "images", "condition"))
+
+
+templates.env.globals["checklist_complete"] = _checklist_complete
+
 router = APIRouter(tags=["web"])
 
 
@@ -36,7 +54,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "total": len(items),
         "active": sum(1 for i in items if i.status == "active"),
         "sold": sum(1 for i in items if i.status == "ended_sold"),
-        "amazon_listed": sum(1 for i in items if i.amazon_sku),
+        "amazon_listed": sum(1 for i in items if i.amazon_listing_status == "active"),
     }
     scheduler = app_state.get("scheduler")
 
@@ -99,6 +117,8 @@ def items_page(
 
 @router.get("/items/{auction_id}", response_class=HTMLResponse)
 def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)):
+    import json as _json
+
     item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
     if not item:
         return HTMLResponse("<h1>Not Found</h1>", status_code=404)
@@ -116,12 +136,23 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
         .limit(50)
         .all()
     )
+
+    # Parse checklist JSON
+    try:
+        checklist = _json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
+    except (_json.JSONDecodeError, TypeError):
+        checklist = {}
+    # Ensure all keys present
+    for k in ("lead_time", "images", "condition"):
+        checklist.setdefault(k, False)
+
     return templates.TemplateResponse("item_detail.html", {
         "request": request,
         "active_page": "items",
         "item": item,
         "history": history,
         "notifications": notifications,
+        "checklist_json": _json.dumps(checklist),
     })
 
 
@@ -181,9 +212,9 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         .filter(WatchedKeyword.source != "manual", WatchedKeyword.is_active == True)  # noqa: E712
         .count()
     )
-    pending_candidates = (
+    auto_added_count = (
         db.query(KeywordCandidate)
-        .filter(KeywordCandidate.status.in_(["pending", "validated"]))
+        .filter(KeywordCandidate.status == "auto_added")
         .count()
     )
     ai_deals = (
@@ -193,14 +224,6 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         .count()
     )
     last_log = db.query(DiscoveryLog).order_by(DiscoveryLog.id.desc()).first()
-    candidates = (
-        db.query(KeywordCandidate)
-        .filter(KeywordCandidate.status.in_(["pending", "validated"]))
-        .order_by(KeywordCandidate.confidence.desc())
-        .limit(20)
-        .all()
-    )
-
     from ..config import settings as app_settings
 
     return templates.TemplateResponse("keywords.html", {
@@ -211,10 +234,9 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         "scanner_available": scanner is not None,
         "discovery_available": discovery is not None,
         "ai_keywords_active": ai_keywords_active,
-        "pending_candidates_count": pending_candidates,
+        "auto_added_count": auto_added_count,
         "ai_deals": ai_deals,
         "last_discovery_log": last_log,
-        "pending_candidates": candidates,
         "anthropic_configured": bool(app_settings.anthropic_api_key),
     })
 

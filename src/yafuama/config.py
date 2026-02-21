@@ -37,10 +37,8 @@ class Settings(BaseSettings):
     sp_api_default_margin_pct: float = 15.0
     sp_api_default_shipping_cost: int = 800
 
-    # Amazon配送テンプレート名（Seller Centralで登録済み）
-    shipping_template_1_2_days: str = "1～2の場合"
-    shipping_template_2_3_days: str = "2～3の場合"
-    shipping_template_3_7_days: str = "3～7の場合"
+    # Amazon配送テンプレート内部ID（SP-API用UUID、全パターン共通）
+    shipping_template_id: str = "62ae5dc7-42e5-4178-bfae-9a16971deb85"  # 通常配送1~2
 
     @property
     def sp_api_enabled(self) -> bool:

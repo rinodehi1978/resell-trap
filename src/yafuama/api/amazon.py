@@ -13,7 +13,7 @@ from ..amazon.pricing import calculate_amazon_price, generate_sku
 from ..amazon.shipping import DELIVERY_REGIONS, get_pattern_by_key, get_shipping_patterns
 from ..config import settings
 from ..database import get_db
-from ..models import MonitoredItem
+from ..models import MonitoredItem, StatusHistory
 from ..schemas import (
     VALID_CONDITIONS,
     AmazonListingCreate,
@@ -189,14 +189,64 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
             "fulfillment_availability": [
                 {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
             ],
-            "lead_time_to_ship_max_days": [{"value": lead_time}],
-            "merchant_shipping_group": [{"value": pattern.template_name}],
         }
-        if body.asin:
-            attributes["item_name"] = [{"value": item.title, "language_tag": "ja_JP"}]
 
-        product_type = "PRODUCT"
-        await client.create_listing(settings.sp_api_seller_id, sku, product_type, attributes)
+        offer_only = False
+        if body.asin:
+            # Offer on existing ASIN: use LISTING_OFFER_ONLY mode
+            attributes["merchant_suggested_asin"] = [{
+                "value": body.asin,
+                "marketplace_id": settings.sp_api_marketplace,
+            }]
+            attributes["merchant_shipping_group"] = [{"value": pattern.template_name}]
+            attributes["lead_time_to_ship_max_days"] = [{"value": lead_time}]
+            offer_only = True
+        else:
+            # New product: include shipping attributes
+            attributes["lead_time_to_ship_max_days"] = [{"value": lead_time}]
+            attributes["merchant_shipping_group"] = [{"value": pattern.template_name}]
+
+        if body.condition_note:
+            attributes["condition_note"] = [
+                {"value": body.condition_note, "language_tag": "ja_JP"}
+            ]
+
+        # Offer images from Yahoo auction
+        if body.image_urls:
+            attributes["main_offer_image_locator"] = [
+                {"media_location": body.image_urls[0]}
+            ]
+            for i, url in enumerate(body.image_urls[1:6]):
+                attributes[f"other_offer_image_locator_{i + 1}"] = [
+                    {"media_location": url}
+                ]
+
+        product_type = await client.get_product_type(body.asin) if body.asin else "PRODUCT"
+
+        # Try with lead_time; if INVALID, retry without it
+        try:
+            await client.create_listing(
+                settings.sp_api_seller_id, sku, product_type, attributes,
+                offer_only=offer_only,
+            )
+        except AmazonApiError as e:
+            if "INVALID" in str(e) and offer_only:
+                logger.info("Listing INVALID with lead_time for %s, retrying without", sku)
+                attributes.pop("lead_time_to_ship_max_days", None)
+                await client.create_listing(
+                    settings.sp_api_seller_id, sku, product_type, attributes,
+                    offer_only=offer_only,
+                )
+                # Fallback: try PATCH for lead_time
+                try:
+                    await client.patch_listing_lead_time(
+                        settings.sp_api_seller_id, sku, lead_time,
+                    )
+                except AmazonApiError:
+                    logger.info("lead_time PATCH also failed for %s", sku)
+            else:
+                raise
+
     except AmazonApiError as e:
         logger.error("Failed to create Amazon listing for %s: %s", body.auction_id, e)
         raise HTTPException(502, f"SP-API error: {e}") from e
@@ -211,8 +261,17 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     item.amazon_margin_pct = margin
     item.amazon_lead_time_days = lead_time
     item.amazon_shipping_pattern = body.shipping_pattern
+    item.amazon_condition_note = body.condition_note
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
+    item.seller_central_checklist = ""  # チェックリストリセット
+
+    # 履歴に記録
+    db.add(StatusHistory(
+        item_id=item.id, auction_id=item.auction_id,
+        change_type="amazon_listing",
+        new_status=sku,
+    ))
     db.commit()
     db.refresh(item)
     return item
@@ -294,13 +353,121 @@ async def delete_listing(auction_id: str, db: Session = Depends(get_db)):
         logger.error("Failed to delete Amazon listing for %s: %s", auction_id, e)
         raise HTTPException(502, f"SP-API error: {e}") from e
 
+    old_sku = item.amazon_sku
     item.amazon_sku = None
-    item.amazon_asin = None
-    item.amazon_listing_status = None
-    item.amazon_price = None
+    item.amazon_listing_status = "delisted"
     item.amazon_last_synced_at = None
     item.updated_at = datetime.now(timezone.utc)
+
+    # 履歴に記録
+    db.add(StatusHistory(
+        item_id=item.id, auction_id=item.auction_id,
+        change_type="amazon_delist",
+        old_status=old_sku,
+    ))
     db.commit()
+
+
+@router.post("/listings/{auction_id}/relist", response_model=AmazonListingResponse, status_code=201)
+async def relist_listing(auction_id: str, body: dict = None, db: Session = Depends(get_db)):
+    """Re-create Amazon listing using stored data (after delist)."""
+    client = _get_sp_client()
+    item = _require_item(auction_id, db)
+    body = body or {}
+
+    if item.amazon_sku:
+        raise HTTPException(409, f"Item {auction_id} already has an active listing (SKU: {item.amazon_sku})")
+    if not item.amazon_asin:
+        raise HTTPException(400, f"Item {auction_id} has no ASIN — use Deal page to list")
+    if (item.status or "").startswith("ended_"):
+        raise HTTPException(410, "ヤフオクが終了済みのため再出品できません。新しいDealから出品してください。")
+
+    condition = body.get("condition") or item.amazon_condition or "used_very_good"
+    if condition not in VALID_CONDITIONS:
+        raise HTTPException(400, f"Invalid condition: {condition}")
+    # Unique SKU to avoid reuse issues after Seller Central deletion
+    suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
+    sku = f"{generate_sku(auction_id)}-R{suffix}"
+    price = item.amazon_price or calculate_amazon_price(
+        item.estimated_win_price, item.shipping_cost, margin_pct=item.amazon_margin_pct,
+    )
+    if price <= 0:
+        raise HTTPException(400, "Price is zero — check estimated_win_price")
+
+    pattern = get_pattern_by_key(item.amazon_shipping_pattern or "2_3_days")
+    if not pattern:
+        pattern = get_pattern_by_key("2_3_days")
+    lead_time = pattern.lead_time_days
+
+    try:
+        attributes = {
+            "condition_type": [{"value": condition}],
+            "purchasable_offer": [{
+                "marketplace_id": settings.sp_api_marketplace,
+                "currency": "JPY",
+                "our_price": [{"schedule": [{"value_with_tax": price}]}],
+            }],
+            "fulfillment_availability": [
+                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
+            ],
+            "merchant_suggested_asin": [{
+                "value": item.amazon_asin,
+                "marketplace_id": settings.sp_api_marketplace,
+            }],
+            "merchant_shipping_group": [{"value": pattern.template_name}],
+            "lead_time_to_ship_max_days": [{"value": lead_time}],
+        }
+
+        if item.amazon_condition_note:
+            attributes["condition_note"] = [
+                {"value": item.amazon_condition_note, "language_tag": "ja_JP"}
+            ]
+
+        product_type = await client.get_product_type(item.amazon_asin)
+
+        try:
+            await client.create_listing(
+                settings.sp_api_seller_id, sku, product_type, attributes,
+                offer_only=True,
+            )
+        except AmazonApiError as e:
+            if "INVALID" in str(e):
+                logger.info("Relist INVALID with lead_time for %s, retrying without", sku)
+                attributes.pop("lead_time_to_ship_max_days", None)
+                await client.create_listing(
+                    settings.sp_api_seller_id, sku, product_type, attributes,
+                    offer_only=True,
+                )
+                try:
+                    await client.patch_listing_lead_time(
+                        settings.sp_api_seller_id, sku, lead_time,
+                    )
+                except AmazonApiError:
+                    logger.info("lead_time PATCH also failed for %s", sku)
+            else:
+                raise
+
+    except AmazonApiError as e:
+        logger.error("Failed to relist Amazon for %s: %s", auction_id, e)
+        raise HTTPException(502, f"SP-API error: {e}") from e
+
+    item.amazon_sku = sku
+    item.amazon_condition = condition
+    item.amazon_listing_status = "active"
+    item.amazon_price = price
+    item.amazon_lead_time_days = lead_time
+    item.amazon_last_synced_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.now(timezone.utc)
+    item.seller_central_checklist = ""
+
+    db.add(StatusHistory(
+        item_id=item.id, auction_id=item.auction_id,
+        change_type="amazon_listing",
+        new_status=sku,
+    ))
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 @router.post("/listings/{auction_id}/sync", response_model=AmazonListingResponse)
