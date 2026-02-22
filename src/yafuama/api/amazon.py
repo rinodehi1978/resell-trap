@@ -247,11 +247,15 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
             else:
                 raise
 
+        # Wait for PUT to be processed before sending PATCHes
+        import asyncio
+        await asyncio.sleep(3)
+
         # Offer-only: send images separately via PATCH after listing is created
         # to prevent image issues from causing "不完全" status
         if offer_only and body.image_urls:
             # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
-            from .image_proxy import upload_images_to_s3
+            from ..amazon.image_proxy import upload_images_to_s3
 
             proxied_urls = await upload_images_to_s3(body.image_urls, body.auction_id)
             try:
@@ -279,6 +283,22 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
                 logger.info("Activation quantity PATCH sent for %s", sku)
             except AmazonApiError:
                 logger.warning("Activation quantity PATCH failed for %s", sku)
+
+            # Feeds API: セラーセントラルの在庫管理システムに直接反映
+            try:
+                await client.submit_price_feed(
+                    settings.sp_api_seller_id, sku, price,
+                )
+                logger.info("Price feed submitted for %s (¥%d)", sku, price)
+            except AmazonApiError:
+                logger.warning("Price feed failed for %s (non-critical)", sku)
+            try:
+                await client.submit_inventory_feed(
+                    settings.sp_api_seller_id, sku, 1, lead_time,
+                )
+                logger.info("Inventory feed submitted for %s", sku)
+            except AmazonApiError:
+                logger.warning("Inventory feed failed for %s (non-critical)", sku)
 
     except AmazonApiError as e:
         logger.error("Failed to create Amazon listing for %s: %s", body.auction_id, e)
@@ -401,6 +421,46 @@ async def delete_listing(auction_id: str, db: Session = Depends(get_db)):
     db.commit()
 
 
+@router.patch("/listings/{auction_id}/price")
+async def update_listing_price(auction_id: str, body: dict, db: Session = Depends(get_db)):
+    """Update Amazon listing price via SP-API and sync DB."""
+    client = _get_sp_client()
+    item = _require_item(auction_id, db)
+    if not item.amazon_sku:
+        raise HTTPException(404, "Amazon出品がありません")
+
+    new_price = body.get("price")
+    if not new_price or not isinstance(new_price, (int, float)) or new_price <= 0:
+        raise HTTPException(400, "正しい価格を入力してください")
+    new_price = int(new_price)
+
+    try:
+        await client.patch_listing_price(settings.sp_api_seller_id, item.amazon_sku, new_price)
+    except AmazonApiError as e:
+        raise HTTPException(502, f"価格変更に失敗: {e}") from e
+
+    # Feeds API: セラーセントラルの在庫管理システムにも価格を反映
+    try:
+        await client.submit_price_feed(settings.sp_api_seller_id, item.amazon_sku, new_price)
+        logger.info("Price feed submitted for %s (¥%d)", item.amazon_sku, new_price)
+    except AmazonApiError:
+        logger.warning("Price feed failed for %s (non-critical)", item.amazon_sku)
+
+    old_price = item.amazon_price
+    item.amazon_price = new_price
+    item.amazon_last_synced_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.now(timezone.utc)
+
+    db.add(StatusHistory(
+        item_id=item.id, auction_id=item.auction_id,
+        change_type="price_change",
+        old_price=old_price, new_price=new_price,
+    ))
+    db.commit()
+
+    return {"status": "ok", "old_price": old_price, "new_price": new_price}
+
+
 @router.post("/listings/{auction_id}/relist", response_model=AmazonListingResponse, status_code=201)
 async def relist_listing(auction_id: str, body: dict = None, db: Session = Depends(get_db)):
     """Re-create Amazon listing using stored data (after delist)."""
@@ -482,11 +542,15 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
             else:
                 raise
 
+        # Wait for PUT to be processed before sending PATCHes
+        import asyncio
+        await asyncio.sleep(3)
+
         # Offer images: PATCH after listing creation
         image_urls = body.get("image_urls", [])
         if image_urls:
             # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
-            from .image_proxy import upload_images_to_s3
+            from ..amazon.image_proxy import upload_images_to_s3
 
             image_urls = await upload_images_to_s3(image_urls, item.auction_id)
             try:
@@ -511,6 +575,22 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
             logger.info("Activation quantity PATCH sent for relist %s", sku)
         except AmazonApiError:
             logger.warning("Activation quantity PATCH failed for relist %s", sku)
+
+        # Feeds API: セラーセントラルの在庫管理システムに直接反映
+        try:
+            await client.submit_price_feed(
+                settings.sp_api_seller_id, sku, price,
+            )
+            logger.info("Price feed submitted for relist %s (¥%d)", sku, price)
+        except AmazonApiError:
+            logger.warning("Price feed failed for relist %s (non-critical)", sku)
+        try:
+            await client.submit_inventory_feed(
+                settings.sp_api_seller_id, sku, 1, lead_time,
+            )
+            logger.info("Inventory feed submitted for relist %s", sku)
+        except AmazonApiError:
+            logger.warning("Inventory feed failed for relist %s (non-critical)", sku)
 
     except AmazonApiError as e:
         logger.error("Failed to relist Amazon for %s: %s", auction_id, e)

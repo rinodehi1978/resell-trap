@@ -8,7 +8,7 @@ import time
 from functools import partial
 from typing import Any
 
-from sp_api.api import CatalogItems, ListingsItems, ListingsRestrictions, Orders, ProductFees
+from sp_api.api import CatalogItems, Feeds, ListingsItems, ListingsRestrictions, Orders, ProductFees
 from sp_api.base import Marketplaces, SellingApiException
 
 from ..config import settings
@@ -62,6 +62,12 @@ class SpApiClient:
 
     def _fees_api(self) -> ProductFees:
         return ProductFees(
+            credentials=self._credentials,
+            marketplace=self._marketplace,
+        )
+
+    def _feeds_api(self) -> Feeds:
+        return Feeds(
             credentials=self._credentials,
             marketplace=self._marketplace,
         )
@@ -267,6 +273,90 @@ class SpApiClient:
             sellerId=seller_id, sku=sku,
             marketplaceIds=[self._marketplace_id], body=body,
         )
+
+    # --- Feeds API (price & inventory sync to Seller Central) ---
+    # XML feeds (POST_PRODUCT_PRICING_DATA等) は403で使用不可。
+    # JSON_LISTINGS_FEED を使用してセラーセントラルに反映する。
+
+    async def submit_price_feed(self, seller_id: str, sku: str, price_jpy: int) -> dict:
+        """Submit a JSON_LISTINGS_FEED to update price in Seller Central."""
+        import json
+        from io import BytesIO
+
+        feed_data = {
+            "header": {
+                "sellerId": seller_id,
+                "version": "2.0",
+                "issueLocale": "ja_JP",
+            },
+            "messages": [{
+                "messageId": 1,
+                "sku": sku,
+                "operationType": "PATCH",
+                "productType": "PRODUCT",
+                "patches": [{
+                    "op": "replace",
+                    "path": "/attributes/purchasable_offer",
+                    "value": [{
+                        "marketplace_id": self._marketplace_id,
+                        "currency": "JPY",
+                        "our_price": [{"schedule": [{"value_with_tax": price_jpy}]}],
+                    }],
+                }],
+            }],
+        }
+        return await self._submit_json_feed(feed_data)
+
+    async def submit_inventory_feed(self, seller_id: str, sku: str, quantity: int, lead_time: int = 4) -> dict:
+        """Submit a JSON_LISTINGS_FEED to update inventory in Seller Central."""
+        import json
+        from io import BytesIO
+
+        feed_data = {
+            "header": {
+                "sellerId": seller_id,
+                "version": "2.0",
+                "issueLocale": "ja_JP",
+            },
+            "messages": [{
+                "messageId": 1,
+                "sku": sku,
+                "operationType": "PATCH",
+                "productType": "PRODUCT",
+                "patches": [{
+                    "op": "replace",
+                    "path": "/attributes/fulfillment_availability",
+                    "value": [{
+                        "fulfillment_channel_code": "DEFAULT",
+                        "quantity": quantity,
+                    }],
+                }],
+            }],
+        }
+        return await self._submit_json_feed(feed_data)
+
+    async def _submit_json_feed(self, feed_data: dict) -> dict:
+        """Submit a JSON_LISTINGS_FEED via Feeds API."""
+        import json
+        from io import BytesIO
+
+        body = json.dumps(feed_data, ensure_ascii=False).encode("utf-8")
+        api = self._feeds_api()
+        loop = asyncio.get_event_loop()
+        try:
+            doc_response, feed_response = await loop.run_in_executor(
+                None,
+                partial(
+                    api.submit_feed,
+                    "JSON_LISTINGS_FEED",
+                    BytesIO(body),
+                    content_type="application/json; charset=UTF-8",
+                    marketplaceIds=[self._marketplace_id],
+                ),
+            )
+            return feed_response.payload
+        except SellingApiException as e:
+            raise AmazonApiError(str(e), getattr(e, "status_code", None)) from e
 
     async def get_listing(self, seller_id: str, sku: str) -> dict:
         api = self._listings_api()

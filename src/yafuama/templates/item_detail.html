@@ -122,7 +122,20 @@
           {# 中央列: Amazon売価 #}
           <div>
             <div class="text-gray-500 text-[10px]">Amazon売価</div>
-            <div class="font-semibold text-purple-700">&yen;{{ "{:,}".format(sell_price) }}</div>
+            <div class="flex items-center gap-1">
+              <span id="price-display" class="font-semibold text-purple-700">&yen;{{ "{:,}".format(sell_price) }}</span>
+              {% if item.amazon_sku %}
+              <button onclick="showPriceEdit()" id="price-edit-btn" class="text-[10px] text-gray-400 hover:text-blue-600" title="価格変更">&#9998;</button>
+              {% endif %}
+            </div>
+            <div id="price-edit-form" class="hidden mt-1">
+              <div class="flex items-center gap-1">
+                <input type="number" id="new-price" value="{{ sell_price }}" min="1" class="w-24 px-1.5 py-0.5 text-xs border rounded">
+                <button onclick="updatePrice()" class="px-1.5 py-0.5 text-[10px] bg-purple-600 text-white rounded hover:bg-purple-700">変更</button>
+                <button onclick="hidePriceEdit()" class="px-1.5 py-0.5 text-[10px] bg-gray-100 rounded hover:bg-gray-200">取消</button>
+              </div>
+              <div id="price-msg" class="text-[10px] mt-0.5"></div>
+            </div>
           </div>
           {# 右列: 粗利 #}
           <div>
@@ -478,6 +491,36 @@ async function deleteItem() {
     msgEl.className = 'text-xs mt-1 text-red-600';
     btn.disabled = false;
     btn.textContent = hasAmazon ? '商品データごと削除' : '削除';
+  }
+}
+
+function showPriceEdit() {
+  document.getElementById('price-edit-form').classList.remove('hidden');
+  document.getElementById('price-edit-btn').classList.add('hidden');
+  document.getElementById('new-price').focus();
+}
+function hidePriceEdit() {
+  document.getElementById('price-edit-form').classList.add('hidden');
+  document.getElementById('price-edit-btn').classList.remove('hidden');
+  document.getElementById('price-msg').textContent = '';
+}
+async function updatePrice() {
+  const price = parseInt(document.getElementById('new-price').value);
+  const msgEl = document.getElementById('price-msg');
+  if (!price || price <= 0) { msgEl.textContent = '正しい価格を入力'; msgEl.className = 'text-[10px] mt-0.5 text-red-600'; return; }
+  try {
+    const resp = await fetch('/api/amazon/listings/' + auctionId + '/price', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({price: price}),
+    });
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.detail || '価格変更に失敗');
+    document.getElementById('price-display').textContent = '¥' + price.toLocaleString();
+    msgEl.textContent = '価格を変更しました'; msgEl.className = 'text-[10px] mt-0.5 text-green-600';
+    setTimeout(() => window.location.reload(), 1500);
+  } catch(e) {
+    msgEl.textContent = e.message; msgEl.className = 'text-[10px] mt-0.5 text-red-600';
   }
 }
 

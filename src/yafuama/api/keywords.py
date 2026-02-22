@@ -326,6 +326,10 @@ async def list_from_deal(
             else:
                 raise
 
+        # Wait for PUT to be processed before sending PATCHes
+        import asyncio
+        await asyncio.sleep(3)
+
         # Offer images: send separately via PATCH after listing is created
         # to prevent image issues from causing "不完全" status
         image_urls = body.get("image_urls", [])
@@ -358,6 +362,23 @@ async def list_from_deal(
             logger.info("Activation quantity PATCH sent for %s", sku)
         except AmazonApiError:
             logger.warning("Activation quantity PATCH failed for %s", sku)
+
+        # Feeds API: セラーセントラルの在庫管理システムに直接反映
+        # (Listings Items API PATCHだけではセラーセントラルに反映されない問題の対策)
+        try:
+            await sp_client.submit_price_feed(
+                settings.sp_api_seller_id, sku, amazon_price,
+            )
+            logger.info("Price feed submitted for %s (¥%d)", sku, amazon_price)
+        except AmazonApiError:
+            logger.warning("Price feed failed for %s (non-critical)", sku)
+        try:
+            await sp_client.submit_inventory_feed(
+                settings.sp_api_seller_id, sku, 1, lead_time,
+            )
+            logger.info("Inventory feed submitted for %s", sku)
+        except AmazonApiError:
+            logger.warning("Inventory feed failed for %s (non-critical)", sku)
 
     except AmazonApiError as e:
         raise HTTPException(502, f"SP-API error: {e}") from e

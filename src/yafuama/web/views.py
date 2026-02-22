@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _template_dir = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_template_dir))
+templates.env.auto_reload = True
 
 
 def _checklist_complete(item: MonitoredItem) -> bool | None:
@@ -197,11 +198,19 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         kw.alert_count = db.query(DealAlert).filter(DealAlert.keyword_id == kw.id).count()
     recent_alerts = (
         db.query(DealAlert)
-        .filter(DealAlert.status == "active")
+        .filter(DealAlert.status.in_(["active", "listed"]))
         .order_by(DealAlert.notified_at.desc())
         .limit(20)
         .all()
     )
+    # Mark alerts that are already monitored
+    monitored_auction_ids = {
+        row[0] for row in db.query(MonitoredItem.auction_id)
+        .filter(MonitoredItem.amazon_sku.isnot(None))
+        .all()
+    }
+    for alert in recent_alerts:
+        alert.is_listed = alert.yahoo_auction_id in monitored_auction_ids
     scanner = app_state.get("deal_scanner")
     discovery = app_state.get("discovery_engine")
 
