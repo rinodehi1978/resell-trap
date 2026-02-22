@@ -606,9 +606,9 @@ function showDeleteConfirm(btn, alertId, keywordId) {
     btn.closest('.relative').appendChild(pop);
   }
 
-  // Auto-close after 10 seconds
+  // Auto-close after timeout (cancellable via pop._autoCloseTimer)
   const timeout = isAlert ? 10000 : 5000;
-  setTimeout(() => { if (pop.parentNode) pop.remove(); }, timeout);
+  pop._autoCloseTimer = setTimeout(() => { if (pop.parentNode) pop.remove(); }, timeout);
 
   // Close on outside click
   const handler = (e) => {
@@ -693,12 +693,6 @@ function _escHtml(str) {
 }
 
 async function rejectAlert(alertId, reason, triggerBtn, note) {
-  // 「その他」の場合はメモ入力画面を表示
-  if (reason === 'other' && note === undefined) {
-    _showOtherNoteInput(alertId, triggerBtn);
-    return;
-  }
-
   if (triggerBtn) { triggerBtn.textContent = '...'; triggerBtn.disabled = true; }
   try {
     const payload = {reason: reason};
@@ -723,6 +717,8 @@ function _showOtherNoteInput(alertId, triggerBtn) {
   // Replace popover content with note input form
   const pop = triggerBtn.closest('.delete-confirm-pop');
   if (!pop) return;
+  // Cancel auto-close timer — user is typing
+  if (pop._autoCloseTimer) { clearTimeout(pop._autoCloseTimer); pop._autoCloseTimer = null; }
   pop.style.width = '260px';
   pop.innerHTML = `
     <div class="text-[10px] text-gray-500 mb-1.5 font-medium">削除理由を入力（任意）</div>
@@ -1164,8 +1160,9 @@ function updateConditionHighlight() {
   });
 }
 document.querySelectorAll('input[name="condition"]').forEach(r => {
-  r.addEventListener('change', () => {
+  r.addEventListener('change', async () => {
     updateConditionHighlight();
+    await _loadTemplates();
     _applyTemplate(r.value);
   });
 });

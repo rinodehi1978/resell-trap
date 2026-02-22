@@ -100,6 +100,22 @@ async def lifespan(app: FastAPI):
         scheduler.add_listing_sync_job(listing_checker, 3600)  # 1時間ごと
         logger.info("Amazon listing sync enabled (interval=3600s)")
 
+    # Amazon order monitor (注文通知)
+    if "sp_api" in app_state and settings.order_monitor_enabled and settings.webhook_url:
+        from .amazon.order_monitor import OrderMonitor
+
+        order_monitor = OrderMonitor(
+            client=app_state["sp_api"],
+            webhook_url=settings.order_webhook_url or settings.webhook_url,
+            webhook_type=settings.webhook_type,
+        )
+        app_state["order_monitor"] = order_monitor
+        scheduler.add_order_monitor_job(order_monitor, settings.order_monitor_interval)
+        logger.info(
+            "Amazon order monitor enabled (interval=%ds)",
+            settings.order_monitor_interval,
+        )
+
     # Load matcher overrides from rejection patterns
     try:
         from .matcher_overrides import overrides as matcher_overrides

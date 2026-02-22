@@ -148,7 +148,7 @@ class DealAlert(Base):
     forwarding_cost: Mapped[int] = mapped_column(Integer, default=0)
     notified_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Rejection feedback
-    status: Mapped[str] = mapped_column(Text, default="active")  # active / rejected
+    status: Mapped[str] = mapped_column(Text, default="active")  # active / rejected / listed / expired
     rejection_reason: Mapped[str] = mapped_column(Text, default="")
     # "wrong_product" | "accessory" | "model_variant" | "bad_price" | "other"
     rejection_note: Mapped[str] = mapped_column(Text, default="")

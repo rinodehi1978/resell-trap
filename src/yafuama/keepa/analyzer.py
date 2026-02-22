@@ -389,7 +389,7 @@ class DealCandidate:
 def score_deal(
     yahoo_price: int,
     keepa_product: dict[str, Any],
-    yahoo_shipping: int = 0,
+    yahoo_shipping: int | None = 0,
     forwarding_cost: int = 960,
     inspection_fee: int = 0,
     amazon_fee_pct: float = 10.0,
@@ -403,6 +403,9 @@ def score_deal(
       amazon_fee = sell_price * amazon_fee_pct / 100
       gross_profit = sell_price - total_cost - amazon_fee
       gross_margin = gross_profit / sell_price * 100
+
+    yahoo_shipping=None means 着払い (buyer pays). In this case, the size-based
+    forwarding cost is used as shipping estimate.
 
     Returns None if:
       - No usable price data from Keepa
@@ -440,6 +443,10 @@ def score_deal(
             return None
         # No size data → use fallback
         actual_forwarding = forwarding_cost
+
+    # 着払い（yahoo_shipping=None）→ サイズベース転送料で推定
+    if yahoo_shipping is None:
+        yahoo_shipping = actual_forwarding
 
     # Total procurement cost: forwarding + system fee (inspection fee deprecated)
     total_cost = yahoo_price + yahoo_shipping + actual_forwarding + SYSTEM_FEE

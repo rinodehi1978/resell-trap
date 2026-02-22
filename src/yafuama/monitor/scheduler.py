@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import MonitoredItem, NotificationLog, StatusHistory
+from ..models import DealAlert, MonitoredItem, NotificationLog, StatusHistory
 from ..notifier.base import BaseNotifier
 from ..scraper.yahoo import YahooAuctionScraper
 
@@ -83,6 +83,17 @@ class MonitorScheduler:
         )
         logger.info("Listing sync job registered (interval=%ds)", interval_seconds)
 
+    def add_order_monitor_job(self, monitor, interval_seconds: int) -> None:
+        """Register the Amazon order monitor as a periodic job."""
+        self._scheduler.add_job(
+            monitor.check_orders,
+            "interval",
+            seconds=interval_seconds,
+            id="order_monitor",
+            replace_existing=True,
+        )
+        logger.info("Order monitor job registered (interval=%ds)", interval_seconds)
+
     def shutdown(self) -> None:
         self._scheduler.shutdown(wait=False)
         self.running = False
@@ -110,6 +121,9 @@ class MonitorScheduler:
 
             # Auto-cleanup ended items (3 days after ending)
             self._cleanup_ended_items(db, now)
+
+            # Expire old DealAlerts (7+ days since notification)
+            self._expire_old_alerts(db, now)
 
             db.commit()
         except Exception as e:
@@ -156,6 +170,17 @@ class MonitorScheduler:
         if data.status != "active":
             item.is_monitoring_active = False
             logger.info("Item %s ended (%s), stopping monitor", item.auction_id, data.status)
+            # Expire corresponding DealAlerts
+            expired_count = (
+                db.query(DealAlert)
+                .filter(
+                    DealAlert.yahoo_auction_id == item.auction_id,
+                    DealAlert.status == "active",
+                )
+                .update({"status": "expired"})
+            )
+            if expired_count:
+                logger.info("Expired %d DealAlert(s) for ended auction %s", expired_count, item.auction_id)
 
         for change in changes:
             db.add(change)
@@ -256,3 +281,25 @@ class MonitorScheduler:
                 )
                 db.delete(item)
             logger.info("Auto-cleanup: removed %d ended items", len(stale))
+
+    @staticmethod
+    def _expire_old_alerts(db: Session, now: datetime) -> None:
+        """Expire DealAlerts older than 7 days.
+
+        Yahoo auctions typically last 1-7 days. Alerts older than 7 days
+        are almost certainly ended, so mark them as expired to remove
+        from the auto-scan page without extra scraping.
+        """
+        from datetime import timedelta
+
+        cutoff = now - timedelta(days=7)
+        expired_count = (
+            db.query(DealAlert)
+            .filter(
+                DealAlert.status == "active",
+                DealAlert.notified_at < cutoff,
+            )
+            .update({"status": "expired"})
+        )
+        if expired_count:
+            logger.info("Expired %d old DealAlert(s) (7+ days)", expired_count)

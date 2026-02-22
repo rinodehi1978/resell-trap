@@ -211,8 +211,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
                 {"value": body.condition_note, "language_tag": "ja_JP"}
             ]
 
-        # Offer images from Yahoo auction
-        if body.image_urls:
+        # For new products, include images in the initial PUT
+        if not offer_only and body.image_urls:
             attributes["main_offer_image_locator"] = [
                 {"media_location": body.image_urls[0]}
             ]
@@ -246,6 +246,39 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
                     logger.info("lead_time PATCH also failed for %s", sku)
             else:
                 raise
+
+        # Offer-only: send images separately via PATCH after listing is created
+        # to prevent image issues from causing "不完全" status
+        if offer_only and body.image_urls:
+            # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
+            from .image_proxy import upload_images_to_s3
+
+            proxied_urls = await upload_images_to_s3(body.image_urls, body.auction_id)
+            try:
+                await client.patch_offer_images(
+                    settings.sp_api_seller_id, sku, proxied_urls,
+                )
+            except AmazonApiError:
+                logger.warning("Offer image PATCH failed for %s (non-critical)", sku)
+
+        # PATCH price + quantity to trigger listing activation
+        # (PUT alone creates the record but doesn't activate the offer;
+        #  some product types need explicit quantity PATCH to become BUYABLE)
+        if offer_only:
+            try:
+                await client.patch_listing_price(
+                    settings.sp_api_seller_id, sku, price,
+                )
+                logger.info("Activation price PATCH sent for %s (¥%d)", sku, price)
+            except AmazonApiError:
+                logger.warning("Activation price PATCH failed for %s", sku)
+            try:
+                await client.patch_listing_quantity(
+                    settings.sp_api_seller_id, sku, 1,
+                )
+                logger.info("Activation quantity PATCH sent for %s", sku)
+            except AmazonApiError:
+                logger.warning("Activation quantity PATCH failed for %s", sku)
 
     except AmazonApiError as e:
         logger.error("Failed to create Amazon listing for %s: %s", body.auction_id, e)
@@ -418,9 +451,11 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
             "lead_time_to_ship_max_days": [{"value": lead_time}],
         }
 
-        if item.amazon_condition_note:
+        # condition_note: bodyで上書き可能（コンディション変更時にテンプレート差し替え）
+        condition_note = body.get("condition_note") or item.amazon_condition_note
+        if condition_note:
             attributes["condition_note"] = [
-                {"value": item.amazon_condition_note, "language_tag": "ja_JP"}
+                {"value": condition_note, "language_tag": "ja_JP"}
             ]
 
         product_type = await client.get_product_type(item.amazon_asin)
@@ -447,6 +482,36 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
             else:
                 raise
 
+        # Offer images: PATCH after listing creation
+        image_urls = body.get("image_urls", [])
+        if image_urls:
+            # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
+            from .image_proxy import upload_images_to_s3
+
+            image_urls = await upload_images_to_s3(image_urls, item.auction_id)
+            try:
+                await client.patch_offer_images(
+                    settings.sp_api_seller_id, sku, image_urls,
+                )
+            except AmazonApiError:
+                logger.warning("Offer image PATCH failed for relist %s (non-critical)", sku)
+
+        # PATCH price + quantity to trigger listing activation
+        try:
+            await client.patch_listing_price(
+                settings.sp_api_seller_id, sku, price,
+            )
+            logger.info("Activation price PATCH sent for relist %s (¥%d)", sku, price)
+        except AmazonApiError:
+            logger.warning("Activation price PATCH failed for relist %s", sku)
+        try:
+            await client.patch_listing_quantity(
+                settings.sp_api_seller_id, sku, 1,
+            )
+            logger.info("Activation quantity PATCH sent for relist %s", sku)
+        except AmazonApiError:
+            logger.warning("Activation quantity PATCH failed for relist %s", sku)
+
     except AmazonApiError as e:
         logger.error("Failed to relist Amazon for %s: %s", auction_id, e)
         raise HTTPException(502, f"SP-API error: {e}") from e
@@ -456,6 +521,8 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     item.amazon_listing_status = "active"
     item.amazon_price = price
     item.amazon_lead_time_days = lead_time
+    if condition_note:
+        item.amazon_condition_note = condition_note
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""

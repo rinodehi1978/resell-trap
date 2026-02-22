@@ -98,6 +98,19 @@ class Settings(BaseSettings):
     def anthropic_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
 
+    # S3 Image Proxy (Yahoo画像→S3→Amazon)
+    s3_image_bucket: str = ""  # S3バケット名（空ならS3アップロード無効）
+    s3_image_region: str = "ap-northeast-1"  # 東京リージョン
+
+    @property
+    def s3_image_enabled(self) -> bool:
+        return bool(self.s3_image_bucket and self.sp_api_aws_access_key)
+
+    # Order Monitor (Amazon注文通知)
+    order_monitor_enabled: bool = True
+    order_monitor_interval: int = 180  # ポーリング間隔（秒、デフォルト3分）
+    order_webhook_url: str = ""  # 注文専用webhook（空ならwebhook_urlと共用）
+
     # Auth
     api_key: str = ""  # Set to enable API key auth; empty = no auth
 

@@ -8,7 +8,7 @@ import time
 from functools import partial
 from typing import Any
 
-from sp_api.api import CatalogItems, ListingsItems, ListingsRestrictions, ProductFees
+from sp_api.api import CatalogItems, ListingsItems, ListingsRestrictions, Orders, ProductFees
 from sp_api.base import Marketplaces, SellingApiException
 
 from ..config import settings
@@ -65,6 +65,28 @@ class SpApiClient:
             credentials=self._credentials,
             marketplace=self._marketplace,
         )
+
+    def _orders_api(self) -> Orders:
+        return Orders(
+            credentials=self._credentials,
+            marketplace=self._marketplace,
+        )
+
+    # --- Orders ---
+
+    async def get_new_orders(self, created_after: str) -> list[dict]:
+        """Get orders created after the given ISO timestamp.
+
+        Returns a list of order dicts with OrderStatus='Unshipped'.
+        """
+        api = self._orders_api()
+        result = await self._call(
+            api.get_orders,
+            CreatedAfter=created_after,
+            MarketplaceIds=[self._marketplace_id],
+            OrderStatuses=["Unshipped"],
+        )
+        return result.get("Orders", []) if isinstance(result, dict) else []
 
     # --- Catalog ---
 
@@ -213,6 +235,33 @@ class SpApiClient:
                 "value": [{"value": group_name}],
             }],
         }
+        return await self._call(
+            api.patch_listings_item,
+            sellerId=seller_id, sku=sku,
+            marketplaceIds=[self._marketplace_id], body=body,
+        )
+
+    async def patch_offer_images(
+        self, seller_id: str, sku: str, image_urls: list[str],
+    ) -> dict:
+        """PATCH offer-level images onto an existing listing."""
+        api = self._listings_api()
+        patches = []
+        if image_urls:
+            patches.append({
+                "op": "replace",
+                "path": "/attributes/main_offer_image_locator",
+                "value": [{"media_location": image_urls[0]}],
+            })
+        for i, url in enumerate(image_urls[1:6]):
+            patches.append({
+                "op": "replace",
+                "path": f"/attributes/other_offer_image_locator_{i + 1}",
+                "value": [{"media_location": url}],
+            })
+        if not patches:
+            return {}
+        body = {"productType": "PRODUCT", "patches": patches}
         return await self._call(
             api.patch_listings_item,
             sellerId=seller_id, sku=sku,

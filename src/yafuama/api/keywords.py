@@ -292,23 +292,12 @@ async def list_from_deal(
             "lead_time_to_ship_max_days": [{"value": lead_time}],
         }
 
-        # Condition note (product description)
+        # 提供条件に関する注記（出品情報ページ、中古コンディション説明）
         condition_note = body.get("condition_note", "").strip()
         if condition_note:
             attributes["condition_note"] = [
                 {"value": condition_note, "language_tag": "ja_JP"}
             ]
-
-        # Offer images from Yahoo auction
-        image_urls = body.get("image_urls", [])
-        if image_urls:
-            attributes["main_offer_image_locator"] = [
-                {"media_location": image_urls[0]}
-            ]
-            for i, url in enumerate(image_urls[1:6]):
-                attributes[f"other_offer_image_locator_{i + 1}"] = [
-                    {"media_location": url}
-                ]
 
         # Get correct productType from Catalog API
         product_type = await sp_client.get_product_type(alert.amazon_asin)
@@ -337,6 +326,39 @@ async def list_from_deal(
             else:
                 raise
 
+        # Offer images: send separately via PATCH after listing is created
+        # to prevent image issues from causing "不完全" status
+        image_urls = body.get("image_urls", [])
+        if image_urls:
+            # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
+            from ..amazon.image_proxy import upload_images_to_s3
+
+            image_urls = await upload_images_to_s3(image_urls, alert.yahoo_auction_id)
+            try:
+                await sp_client.patch_offer_images(
+                    settings.sp_api_seller_id, sku, image_urls,
+                )
+            except AmazonApiError:
+                logger.warning("Offer image PATCH failed for %s (non-critical)", sku)
+
+        # PATCH price + quantity to trigger listing activation
+        # (PUT alone creates the record but doesn't activate the offer;
+        #  some product types need explicit quantity PATCH to become BUYABLE)
+        try:
+            await sp_client.patch_listing_price(
+                settings.sp_api_seller_id, sku, amazon_price,
+            )
+            logger.info("Activation price PATCH sent for %s (¥%d)", sku, amazon_price)
+        except AmazonApiError:
+            logger.warning("Activation price PATCH failed for %s", sku)
+        try:
+            await sp_client.patch_listing_quantity(
+                settings.sp_api_seller_id, sku, 1,
+            )
+            logger.info("Activation quantity PATCH sent for %s", sku)
+        except AmazonApiError:
+            logger.warning("Activation quantity PATCH failed for %s", sku)
+
     except AmazonApiError as e:
         raise HTTPException(502, f"SP-API error: {e}") from e
 
@@ -358,6 +380,9 @@ async def list_from_deal(
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""  # チェックリストリセット
+
+    # DealAlertを出品済みに変更（オートスキャンページから非表示）
+    alert.status = "listed"
 
     # 履歴に記録
     db.add(StatusHistory(

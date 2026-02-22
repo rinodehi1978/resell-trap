@@ -353,7 +353,8 @@ class DealScanner:
         yahoo_title = yr.title if hasattr(yr, "title") else yr.get("title", "")
 
         yr_shipping = yr.shipping_cost if hasattr(yr, "shipping_cost") else yr.get("shipping_cost")
-        yahoo_shipping = yr_shipping if yr_shipping is not None else settings.deal_default_shipping
+        # None = 着払い/送料不明 → score_dealでサイズベース転送料を使用
+        yahoo_shipping = yr_shipping
 
         best_deal = None
         best_score = -1
@@ -434,7 +435,9 @@ class DealScanner:
                 best_score = result.score
                 deal.yahoo_title = yahoo_title
                 deal.yahoo_price = yahoo_price
-                deal.yahoo_shipping = yahoo_shipping
+                # yahoo_shippingがNone(着払い)の場合、score_dealが算出済みの値を維持
+                if yahoo_shipping is not None:
+                    deal.yahoo_shipping = yahoo_shipping
                 deal.yahoo_auction_id = yr.auction_id if hasattr(yr, "auction_id") else yr.get("auction_id", "")
                 deal.yahoo_url = yr.url if hasattr(yr, "url") else yr.get("url", "")
                 deal.yahoo_image_url = yr.image_url if hasattr(yr, "image_url") else yr.get("image_url", "")
