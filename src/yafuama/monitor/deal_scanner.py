@@ -6,6 +6,8 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
+
 from ..config import settings
 from ..database import SessionLocal
 from ..keepa.analyzer import score_deal
@@ -185,7 +187,7 @@ class DealScanner:
             # Send notification
             await self._send_webhook(deal, kw)
 
-            # Record alert
+            # Record alert (use savepoint to handle duplicate gracefully)
             alert = DealAlert(
                 keyword_id=kw.id,
                 yahoo_auction_id=deal.yahoo_auction_id,
@@ -202,7 +204,14 @@ class DealScanner:
                 amazon_fee_pct=round(deal.amazon_fee / deal.sell_price * 100, 1) if deal.sell_price else 10.0,
                 forwarding_cost=deal.forwarding_cost,
             )
-            db.add(alert)
+            try:
+                nested = db.begin_nested()
+                db.add(alert)
+                db.flush()
+            except IntegrityError:
+                nested.rollback()
+                logger.debug("Duplicate alert skipped: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
+                continue
 
             # 型番シリーズ横展開: 利益Deal発見時に兄弟モデル候補を自動生成
             if deal.gross_profit >= settings.series_expansion_min_profit:

@@ -67,6 +67,14 @@ class AuctionPageParser:
         if seller_match:
             seller_id = seller_match.group(1)
 
+        # Store listings: pageData.price is tax-excluded; add 10% consumption tax
+        is_store = items.get("isStore") == "1" or items.get("isStore") == 1
+        raw_price = int(items.get("price", 0))
+        raw_win = int(items.get("winPrice", 0))
+        if is_store:
+            raw_price = int(raw_price * 1.1)
+            raw_win = int(raw_win * 1.1)
+
         return AuctionData(
             auction_id=auction_id,
             title=items.get("productName", ""),
@@ -74,10 +82,10 @@ class AuctionPageParser:
             image_url=image_url,
             category_id=items.get("productCategoryID", ""),
             seller_id=seller_id,
-            current_price=int(items.get("price", 0)),
-            start_price=int(items.get("price", 0)),  # pageData doesn't expose startPrice separately
+            current_price=raw_price,
+            start_price=raw_price,  # pageData doesn't expose startPrice separately
             buy_now_price=0,  # not in pageData
-            win_price=int(items.get("winPrice", 0)),
+            win_price=raw_win,
             start_time=start_time,
             end_time=end_time,
             bid_count=int(items.get("bids", 0)),
@@ -207,6 +215,15 @@ class SearchResultsParser:
         if buy_now_price <= 0:
             buy_now_price = self._parse_buy_now_price(li)
 
+        # Store listings: buynowprice/startprice are tax-excluded; add 10%
+        # (data-auction-price is already tax-included for store listings)
+        is_store = attrs.get("isshoppingitem") == "1"
+        start_price = int(attrs.get("startprice", 0))
+        if is_store:
+            if buy_now_price > 0:
+                buy_now_price = int(buy_now_price * 1.1)
+            start_price = int(start_price * 1.1)
+
         return SearchResultItem(
             auction_id=auction_id,
             title=attrs.get("title", ""),
@@ -214,7 +231,7 @@ class SearchResultsParser:
             image_url=attrs.get("img", ""),
             current_price=int(attrs.get("price", 0)),
             buy_now_price=buy_now_price,
-            start_price=int(attrs.get("startprice", 0)),
+            start_price=start_price,
             bid_count=bid_count,
             end_time=end_time,
             seller_id=attrs.get("auc-seller-id", ""),
