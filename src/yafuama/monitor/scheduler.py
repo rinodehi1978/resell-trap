@@ -131,8 +131,10 @@ class MonitorScheduler:
             now = datetime.now(timezone.utc)
             for item in items:
                 interval = self._effective_interval(item)
-                if item.last_checked_at and (now - item.last_checked_at).total_seconds() < interval:
-                    continue
+                if item.last_checked_at:
+                    last = item.last_checked_at if item.last_checked_at.tzinfo else item.last_checked_at.replace(tzinfo=timezone.utc)
+                    if (now - last).total_seconds() < interval:
+                        continue
                 try:
                     await self._check_item(item, db)
                 except Exception as e:
@@ -309,8 +311,8 @@ class MonitorScheduler:
             return item.check_interval_seconds
 
         now = datetime.now(timezone.utc)
-        # Handle timezone-aware end_time
-        end = item.end_time.replace(tzinfo=None) if item.end_time.tzinfo else item.end_time
+        # Ensure end_time is timezone-aware (SQLite stores naive UTC)
+        end = item.end_time if item.end_time.tzinfo else item.end_time.replace(tzinfo=timezone.utc)
         remaining = (end - now).total_seconds()
 
         if remaining <= 0:
