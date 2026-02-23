@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     deal_inspection_fee: int = 0          # 廃止（システム利用料に含まれる）
     deal_system_fee: int = 100            # 無在庫1配送毎のシステム利用料 (円)
     deal_amazon_fee_pct: float = 10.0     # Amazon販売手数料率 (%)
-    deal_min_gross_margin_pct: float = 40.0  # 最低粗利率 (%)
-    deal_max_gross_margin_pct: float = 70.0  # 粗利率上限 (%) — 超過はほぼ誤マッチ
+    deal_min_gross_margin_pct: float = 25.0  # 最低粗利率 (%)
+    deal_max_gross_margin_pct: float = 999.0  # 粗利率上限なし（型番一致で精度担保）
     deal_strict_margin_pct: float = 50.0   # この粗利率以上はマッチング厳格化
     deal_min_gross_profit: int = 3000     # 最低粗利益 (円)
     deal_scan_interval: int = 600         # 自動スキャン間隔 (秒、デフォルト10分)
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
 
     # Demand Discovery（需要ベースキーワード発見）
     demand_finder_enabled: bool = True
-    demand_finder_min_drops30: int = 5        # 月間最低販売回数
+    demand_finder_min_drops90: int = 1        # 過去3ヶ月の最低販売回数
     demand_finder_min_used_price: int = 10000 # 中古最低価格（円）
     demand_finder_max_results: int = 50       # Product Finder最大取得件数
 

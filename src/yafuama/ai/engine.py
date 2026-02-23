@@ -70,7 +70,7 @@ class DiscoveryEngine:
                 try:
                     demand_products = await self._keepa.product_finder(
                         selection={
-                            "salesRankDrops30_gte": settings.demand_finder_min_drops30,
+                            "salesRankDrops90_gte": settings.demand_finder_min_drops90,
                             "current_USED_gte": settings.demand_finder_min_used_price,
                             "perPage": settings.demand_finder_max_results,
                         },
