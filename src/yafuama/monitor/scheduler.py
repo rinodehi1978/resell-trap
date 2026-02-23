@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
@@ -34,6 +34,13 @@ class MonitorScheduler:
             "interval",
             seconds=settings.min_check_interval,
             id="monitor_loop",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._expire_ended_alerts,
+            "interval",
+            seconds=1800,  # 30分ごと
+            id="alert_cleanup",
             replace_existing=True,
         )
         self._scheduler.start()
@@ -111,13 +118,21 @@ class MonitorScheduler:
                 )
                 .all()
             )
+            if items:
+                logger.info("Monitor loop: %d active items to check", len(items))
 
-            now = datetime.now(timezone.utc)
+            now = datetime.utcnow()
             for item in items:
                 interval = self._effective_interval(item)
                 if item.last_checked_at and (now - item.last_checked_at).total_seconds() < interval:
                     continue
-                await self._check_item(item, db)
+                try:
+                    await self._check_item(item, db)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to check item %s (%s): %s",
+                        item.auction_id, item.title[:30], e,
+                    )
 
             # Auto-cleanup ended items (3 days after ending)
             self._cleanup_ended_items(db, now)
@@ -137,6 +152,7 @@ class MonitorScheduler:
         data = await self.scraper.fetch_auction(item.auction_id)
         if not data:
             logger.warning("Failed to fetch %s", item.auction_id)
+            item.last_checked_at = datetime.utcnow()
             return
 
         changes: list[StatusHistory] = []
@@ -162,9 +178,10 @@ class MonitorScheduler:
         item.current_price = data.current_price
         item.win_price = data.win_price
         item.bid_count = data.bid_count
+        item.end_time = data.end_time
         item.status = data.status
-        item.last_checked_at = datetime.now(timezone.utc)
-        item.updated_at = datetime.now(timezone.utc)
+        item.last_checked_at = datetime.utcnow()
+        item.updated_at = datetime.utcnow()
 
         # Stop monitoring ended items
         if data.status != "active":
@@ -241,7 +258,7 @@ class MonitorScheduler:
         if not item.auto_adjust_interval or not item.end_time:
             return item.check_interval_seconds
 
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         # Handle timezone-aware end_time
         end = item.end_time.replace(tzinfo=None) if item.end_time.tzinfo else item.end_time
         remaining = (end - now).total_seconds()
@@ -257,30 +274,30 @@ class MonitorScheduler:
 
     @staticmethod
     def _cleanup_ended_items(db: Session, now: datetime) -> None:
-        """Auto-delete ended MonitoredItems immediately.
+        """Auto-delete ended MonitoredItems after 7 days.
 
-        Conditions for cleanup:
-        - Yahoo auction ended (status starts with 'ended_')
-        - Amazon listing is NOT active (already deactivated or never listed)
-        - Amazon listing is NOT in error state (needs manual attention)
+        Keeps ended items visible for user review. Only auto-cleans
+        items that have been ended for 7+ days (fallback cleanup).
         """
+        cutoff = now - timedelta(days=7)
         stale = (
             db.query(MonitoredItem)
             .filter(
                 MonitoredItem.status.like("ended_%"),
                 MonitoredItem.amazon_listing_status != "active",
                 MonitoredItem.amazon_listing_status != "error",
+                MonitoredItem.updated_at < cutoff,
             )
             .all()
         )
         if stale:
             for item in stale:
                 logger.info(
-                    "Auto-cleanup: removing ended item %s (%s)",
-                    item.auction_id, item.status,
+                    "Auto-cleanup: removing old ended item %s (%s, updated %s)",
+                    item.auction_id, item.status, item.updated_at,
                 )
                 db.delete(item)
-            logger.info("Auto-cleanup: removed %d ended items", len(stale))
+            logger.info("Auto-cleanup: removed %d old ended items", len(stale))
 
     @staticmethod
     def _expire_old_alerts(db: Session, now: datetime) -> None:
@@ -290,8 +307,6 @@ class MonitorScheduler:
         are almost certainly ended, so mark them as expired to remove
         from the auto-scan page without extra scraping.
         """
-        from datetime import timedelta
-
         cutoff = now - timedelta(days=7)
         expired_count = (
             db.query(DealAlert)
@@ -303,3 +318,48 @@ class MonitorScheduler:
         )
         if expired_count:
             logger.info("Expired %d old DealAlert(s) (7+ days)", expired_count)
+
+    async def _expire_ended_alerts(self) -> None:
+        """Check active DealAlerts and expire those whose Yahoo auctions have ended."""
+        db: Session = SessionLocal()
+        try:
+            active_alerts = (
+                db.query(DealAlert)
+                .filter(DealAlert.status == "active")
+                .all()
+            )
+            if not active_alerts:
+                return
+
+            # Group by auction_id to avoid duplicate fetches
+            alerts_by_auction: dict[str, list[DealAlert]] = {}
+            for alert in active_alerts:
+                alerts_by_auction.setdefault(alert.yahoo_auction_id, []).append(alert)
+
+            logger.info(
+                "Alert cleanup: checking %d auctions for %d active alerts",
+                len(alerts_by_auction), len(active_alerts),
+            )
+
+            expired_count = 0
+            for auction_id, alerts in alerts_by_auction.items():
+                try:
+                    data = await self.scraper.fetch_auction(auction_id)
+                    if data and data.status != "active":
+                        for alert in alerts:
+                            alert.status = "expired"
+                            expired_count += 1
+                except Exception as e:
+                    logger.warning("Alert cleanup: failed to check %s: %s", auction_id, e)
+
+            if expired_count:
+                logger.info(
+                    "Alert cleanup: expired %d DealAlert(s) for ended auctions",
+                    expired_count,
+                )
+            db.commit()
+        except Exception as e:
+            logger.exception("Error in alert cleanup: %s", e)
+            db.rollback()
+        finally:
+            db.close()

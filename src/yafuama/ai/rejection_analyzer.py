@@ -193,6 +193,9 @@ def analyze_single_rejection(alert: DealAlert, reason: str, db: Session) -> None
     if reason == "bad_price":
         _learn_price_pattern(alert, db)
 
+    if reason == "never_show":
+        _learn_never_show_pair(alert, db)
+
     # Always record the problem pair for future reference
     _upsert_pattern(
         db,
@@ -207,23 +210,6 @@ def analyze_single_rejection(alert: DealAlert, reason: str, db: Session) -> None
         }),
         confidence=0.8,
     )
-
-    # Check if this ASIN has been rejected 3+ times → block it
-    asin_rejections = db.query(DealAlert).filter(
-        DealAlert.amazon_asin == alert.amazon_asin,
-        DealAlert.status == "rejected",
-    ).count()
-    if asin_rejections >= 3:
-        _upsert_pattern(
-            db,
-            pattern_type="blocked_asin",
-            pattern_key=alert.amazon_asin,
-            pattern_data=json.dumps({
-                "rejection_count": asin_rejections,
-                "last_reason": reason,
-            }),
-            confidence=min(0.5 + asin_rejections * 0.1, 1.0),
-        )
 
     logger.info(
         "Rejection patterns extracted: alert=%d reason=%s asin=%s",
@@ -280,6 +266,25 @@ def _learn_model_conflict(
                 "amazon_title": (alert.amazon_title or "")[:100],
             }),
             confidence=0.7,
+        )
+
+
+def _learn_never_show_pair(alert: DealAlert, db: Session) -> None:
+    """Record an exact (yahoo_title, amazon_title) pair to never show again."""
+    y_title = (alert.yahoo_title or "").strip()
+    a_title = (alert.amazon_title or "").strip()
+    if y_title and a_title:
+        key = f"{y_title[:100]}|{a_title[:100]}"
+        _upsert_pattern(
+            db,
+            pattern_type="never_show_pair",
+            pattern_key=key,
+            pattern_data=json.dumps({
+                "yahoo_title": y_title,
+                "amazon_title": a_title,
+                "asin": alert.amazon_asin or "",
+            }),
+            confidence=1.0,
         )
 
 

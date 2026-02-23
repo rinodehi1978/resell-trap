@@ -10,6 +10,15 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class AuctionGoneError(Exception):
+    """Raised when a Yahoo auction page returns 404/410 (removed or expired)."""
+
+    def __init__(self, url: str, status_code: int) -> None:
+        self.url = url
+        self.status_code = status_code
+        super().__init__(f"Auction gone (HTTP {status_code}): {url}")
+
 YAHOO_AUCTION_ITEM_URL = "https://auctions.yahoo.co.jp/jp/auction/{}"
 YAHOO_SEARCH_URL = "https://auctions.yahoo.co.jp/search/search"
 
@@ -44,13 +53,17 @@ class YahooClient:
         return await self._fetch(YAHOO_SEARCH_URL, params=params)
 
     async def _fetch(self, url: str, params: dict | None = None) -> str | None:
+        """Fetch a URL. Returns HTML string, None on error, or raises AuctionGoneError on 404."""
         client = await self._get_client()
         try:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             return resp.text
         except httpx.HTTPStatusError as e:
-            logger.warning("HTTP %s for %s", e.response.status_code, url)
+            status_code = e.response.status_code
+            logger.warning("HTTP %s for %s", status_code, url)
+            if status_code in (404, 410):
+                raise AuctionGoneError(url, status_code) from e
             if settings.scraper_use_selenium_fallback:
                 return self._selenium_fallback(url)
             return None

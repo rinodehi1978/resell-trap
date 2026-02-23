@@ -20,7 +20,7 @@ class MatcherOverrides:
         self._lock = threading.Lock()
         self._extra_accessory_words: frozenset[str] = frozenset()
         self._blocked_pairs: set[tuple[str, str]] = set()
-        self._blocked_asins: set[str] = set()
+        self._never_show_pairs: set[tuple[str, str]] = set()  # (yahoo_title, amazon_title)
         self._threshold_adjustment: float = 0.0
 
     def reload(self) -> None:
@@ -42,7 +42,7 @@ class MatcherOverrides:
 
             accessory: set[str] = set()
             blocked_pairs: set[tuple[str, str]] = set()
-            blocked_asins: set[str] = set()
+            never_show_pairs: set[tuple[str, str]] = set()
             threshold_adj = 0.0
 
             for p in patterns:
@@ -54,8 +54,12 @@ class MatcherOverrides:
                     if len(parts) == 2:
                         blocked_pairs.add((parts[0], parts[1]))
 
-                elif p.pattern_type == "blocked_asin" and p.confidence >= 0.7:
-                    blocked_asins.add(p.pattern_key)
+                elif p.pattern_type == "never_show_pair":
+                    data = _safe_json(p.pattern_data)
+                    y_title = data.get("yahoo_title", "")
+                    a_title = data.get("amazon_title", "")
+                    if y_title and a_title:
+                        never_show_pairs.add((y_title, a_title))
 
                 elif p.pattern_type == "threshold_hint" and p.pattern_key == "match_threshold":
                     data = _safe_json(p.pattern_data)
@@ -64,13 +68,13 @@ class MatcherOverrides:
             with self._lock:
                 self._extra_accessory_words = frozenset(accessory)
                 self._blocked_pairs = blocked_pairs
-                self._blocked_asins = blocked_asins
+                self._never_show_pairs = never_show_pairs
                 self._threshold_adjustment = threshold_adj
 
             logger.info(
                 "Matcher overrides reloaded: %d accessory words, %d blocked pairs, "
-                "%d blocked ASINs, threshold adj=%.3f",
-                len(accessory), len(blocked_pairs), len(blocked_asins), threshold_adj,
+                "%d never-show pairs, threshold adj=%.3f",
+                len(accessory), len(blocked_pairs), len(never_show_pairs), threshold_adj,
             )
         except Exception:
             logger.exception("Failed to reload matcher overrides")
@@ -88,9 +92,9 @@ class MatcherOverrides:
             return set(self._blocked_pairs)
 
     @property
-    def blocked_asins(self) -> set[str]:
+    def never_show_pairs(self) -> set[tuple[str, str]]:
         with self._lock:
-            return set(self._blocked_asins)
+            return set(self._never_show_pairs)
 
     @property
     def threshold_adjustment(self) -> float:

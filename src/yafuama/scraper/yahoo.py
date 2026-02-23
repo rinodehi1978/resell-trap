@@ -6,7 +6,7 @@ import logging
 import re
 
 from ..schemas import AuctionData, SearchResultItem
-from .client import YahooClient
+from .client import AuctionGoneError, YahooClient
 from .parser import AuctionPageParser, SearchResultsParser
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,15 @@ class YahooAuctionScraper:
         self._search_parser = SearchResultsParser()
 
     async def fetch_auction(self, auction_id: str) -> AuctionData | None:
-        html = await self.client.fetch_auction_page(auction_id)
+        try:
+            html = await self.client.fetch_auction_page(auction_id)
+        except AuctionGoneError:
+            logger.info("Auction %s removed (404/410) — treating as ended", auction_id)
+            return AuctionData(
+                auction_id=auction_id,
+                is_closed=True,
+                has_winner=False,
+            )
         if not html:
             return None
         return self._page_parser.parse(html)

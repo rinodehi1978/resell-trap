@@ -59,6 +59,12 @@
       <div class="text-sm font-medium text-purple-700">&yen;{{ "{:,}".format(item.amazon_price) }}</div>
       <div class="text-xs text-gray-400">Amazon価格</div>
       {% endif %}
+      {% if item.status.startswith('ended_') %}
+      <button onclick="event.preventDefault(); event.stopPropagation(); deleteItem('{{ item.auction_id }}')"
+              class="mt-1 px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-red-100 hover:text-red-700 transition-colors">
+        確認済み・削除
+      </button>
+      {% endif %}
     </div>
   </a>
   {% else %}
@@ -66,4 +72,20 @@
   {% endfor %}
 </div>
 
+<script>
+async function deleteItem(auctionId) {
+  if (!confirm('この商品をモニタリングから削除しますか？')) return;
+  try {
+    const resp = await fetch(`/api/items/${auctionId}`, {method: 'DELETE'});
+    if (resp.ok) {
+      location.reload();
+    } else {
+      const data = await resp.json().catch(() => ({}));
+      alert(data.detail || '削除に失敗しました');
+    }
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
+  }
+}
+</script>
 {% endblock %}

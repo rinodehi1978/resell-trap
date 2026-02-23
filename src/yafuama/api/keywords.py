@@ -85,6 +85,7 @@ VALID_REJECTION_REASONS = (
     "accessory",       # 部品/アクセサリー
     "model_variant",   # モデル/バリアント違い
     "bad_price",       # 価格おかしい
+    "never_show",      # 二度と出すな（同タイトルペアをブロック）
     "other",           # その他
 )
 
@@ -121,6 +122,7 @@ def suggest_rejection_reasons(alert_id: int, db: Session = Depends(get_db)):
         {"reason": "accessory", "label": "部品/アクセサリー"},
         {"reason": "model_variant", "label": "モデル/バリアント違い"},
         {"reason": "bad_price", "label": "価格おかしい"},
+        {"reason": "never_show", "label": "二度と出すな"},
         {"reason": "other", "label": "その他"},
     ]
     return {"suggestions": suggestions, "static_reasons": static_reasons}

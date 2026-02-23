@@ -10,7 +10,6 @@ from ..config import settings
 from ..database import SessionLocal
 from ..keepa.analyzer import score_deal
 from ..matcher import (
-    extract_accessory_signals_from_text,
     extract_model_numbers_from_text,
     extract_product_info,
     is_apparel,
@@ -378,14 +377,15 @@ class DealScanner:
             if not result.is_likely_match:
                 continue
 
-            # Check rejection-learned blocked pairs/ASINs
+            # Check rejection-learned blocked pairs and never-show pairs
             try:
                 from ..matcher_overrides import overrides
                 _yr_id = yr.auction_id if hasattr(yr, "auction_id") else yr.get("auction_id", "")
                 _kp_asin = kp.get("asin", "")
                 if (_yr_id, _kp_asin) in overrides.blocked_pairs:
                     continue
-                if _kp_asin in overrides.blocked_asins:
+                # 「二度と出すな」: Yahoo title + Amazon title ペアをチェック
+                if (yahoo_title, amazon_title) in overrides.never_show_pairs:
                     continue
             except ImportError:
                 pass
@@ -417,20 +417,10 @@ class DealScanner:
                 if deal.sell_price > 0 and yahoo_price < deal.sell_price * 0.25:
                     continue
 
-                # 深層検証: 利益率が閾値以上の候補はヤフオク説明文でアクセサリー検査
-                if (
-                    settings.deal_deep_validation_enabled
-                    and deal.gross_margin_pct >= settings.deal_deep_validation_margin_threshold
-                ):
-                    if self._deep_validation_count < settings.deal_deep_validation_max_per_cycle:
-                        yahoo_auction_id = yr.auction_id if hasattr(yr, "auction_id") else yr.get("auction_id", "")
-                        is_valid = await self._deep_validate_deal(yahoo_auction_id, yahoo_title)
-                        if not is_valid:
-                            continue  # アクセサリー検知 → skip
-                    else:
-                        # レート制限超過 → 既存のstrict checkにfallback
-                        if not result.passes_strict_check():
-                            continue
+                # 高マージン時のstrict check（型番・タイプ矛盾がないか確認）
+                if deal.gross_margin_pct >= settings.deal_deep_validation_margin_threshold:
+                    if not result.passes_strict_check():
+                        continue
 
                 best_score = result.score
                 deal.yahoo_title = yahoo_title

@@ -459,10 +459,16 @@ def _canonicalize_tokens(tokens: list[str]) -> list[str]:
     return result
 
 
+_SPEC_UNIT_RE = re.compile(
+    r"^\d+(?:mah|mhz|ghz|gb|tb|mb|hz|mm|cm|kg|mp|db|lm|ch|k|w|v)$"
+)
+
+
 def _extract_model_numbers(tokens: list[str]) -> set[str]:
     """Extract tokens that look like model numbers (contain both letters and digits).
 
     Examples: "wh-1000xm4", "cfi-1200a", "ps5", "3ds", "rtx3080"
+    Excludes spec/unit tokens like "4k", "1ch", "128gb", "60hz".
     """
     models = set()
     for t in tokens:
@@ -471,6 +477,8 @@ def _extract_model_numbers(tokens: list[str]) -> set[str]:
         has_letter = bool(re.search(r"[a-z]", stripped))
         has_digit = bool(re.search(r"[0-9]", stripped))
         if has_letter and has_digit and len(stripped) >= 2:
+            if _SPEC_UNIT_RE.match(stripped):
+                continue  # Skip spec/unit tokens (4k, 1ch, 128gb, etc.)
             models.add(stripped)
     return models
 
@@ -787,13 +795,16 @@ class MatchResult:
 
     @property
     def is_likely_match(self) -> bool:
-        if self.qty_conflict or self.accessory_conflict:
-            return False  # Hard reject: different quantity or part vs main
+        if self.qty_conflict:
+            return False  # Hard reject: different quantity
         if self.brand_conflict:
             return False  # Hard reject: different brand = different product
-        # 型番一致必須: タイトル型番 or Keepa型番のどちらかで一致が必要
-        if not self.model_match and not self.keepa_model_match:
-            return False
+        if self.model_conflict:
+            return False  # Hard reject: both have model numbers but different
+        # 型番一致 → マッチ（最強シグナル、スコア閾値スキップ）
+        if self.model_match or self.keepa_model_match:
+            return True
+        # 片方/両方に型番なし → 従来のスコア制にフォールバック
         threshold = MATCH_THRESHOLD
         try:
             from .matcher_overrides import overrides
@@ -810,13 +821,12 @@ class MatchResult:
         - Must have model number match OR high token overlap
         - No model conflict, no type conflict
         """
-        if self.qty_conflict or self.accessory_conflict:
+        if self.qty_conflict:
             return False
         if self.model_conflict or self.type_conflict:
             return False
         if self.score < STRICT_MATCH_THRESHOLD:
             return False
-        # Must have at least one strong signal: model match or high token overlap
         if not self.model_match and self.token_overlap < 0.40:
             return False
         return True

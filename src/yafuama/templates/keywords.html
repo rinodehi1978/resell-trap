@@ -629,6 +629,7 @@ const _REASON_COLORS = {
   'accessory': 'bg-orange-50 text-orange-700 hover:bg-orange-100',
   'model_variant': 'bg-amber-50 text-amber-700 hover:bg-amber-100',
   'bad_price': 'bg-purple-50 text-purple-700 hover:bg-purple-100',
+  'never_show': 'bg-red-100 text-red-800 hover:bg-red-200',
   'other': 'bg-gray-50 text-gray-600 hover:bg-gray-100',
 };
 
@@ -673,7 +674,8 @@ function _renderSuggestionPopover(pop, alertId, data) {
   });
   html += '</div>';
   html += '<div class="border-t border-gray-100 my-1.5"></div>';
-  html += `<button class="w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="deleteAlertClean(${alertId}, this)">出品終了（学習なし削除）</button>`;
+  html += `<button class="w-full px-2 py-1 text-xs bg-red-100 text-red-800 rounded hover:bg-red-200 text-left font-bold" onclick="rejectAlert(${alertId}, 'never_show', this)">二度と出すな</button>`;
+  html += `<button class="mt-1 w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="deleteAlertClean(${alertId}, this)">出品終了（学習なし削除）</button>`;
   html += '<button class="mt-1.5 w-full px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-600" onclick="this.closest(\'.delete-confirm-pop\').remove()">キャンセル</button>';
   pop.innerHTML = html;
 }
@@ -689,7 +691,8 @@ function _renderStaticPopover(pop, alertId) {
       <button class="px-2 py-1 text-xs bg-gray-50 text-gray-600 rounded hover:bg-gray-100 text-left" onclick="rejectAlert(${alertId}, 'other', this)">その他</button>
     </div>
     <div class="border-t border-gray-100 my-1.5"></div>
-    <button class="w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="deleteAlertClean(${alertId}, this)">出品終了（学習なし削除）</button>
+    <button class="w-full px-2 py-1 text-xs bg-red-100 text-red-800 rounded hover:bg-red-200 text-left font-bold" onclick="rejectAlert(${alertId}, 'never_show', this)">二度と出すな</button>
+    <button class="mt-1 w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="deleteAlertClean(${alertId}, this)">出品終了（学習なし削除）</button>
     <button class="mt-1.5 w-full px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-600" onclick="this.closest('.delete-confirm-pop').remove()">キャンセル</button>
   `;
 }
