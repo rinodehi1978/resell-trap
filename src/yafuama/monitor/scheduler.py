@@ -32,7 +32,7 @@ class MonitorScheduler:
         self._scheduler.add_job(
             self._check_all,
             "interval",
-            seconds=settings.min_check_interval,
+            seconds=60,  # 60秒tickで十分（実際のスクレイピング間隔はcheck_interval_seconds=300）
             id="monitor_loop",
             replace_existing=True,
         )
