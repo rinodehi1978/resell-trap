@@ -128,7 +128,7 @@ class MonitorScheduler:
             if items:
                 logger.info("Monitor loop: %d active items to check", len(items))
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             for item in items:
                 interval = self._effective_interval(item)
                 if item.last_checked_at and (now - item.last_checked_at).total_seconds() < interval:
@@ -159,7 +159,7 @@ class MonitorScheduler:
         data = await self.scraper.fetch_auction(item.auction_id)
         if not data:
             logger.warning("Failed to fetch %s", item.auction_id)
-            item.last_checked_at = datetime.utcnow()
+            item.last_checked_at = datetime.now(timezone.utc)
             return
 
         changes: list[StatusHistory] = []
@@ -193,8 +193,8 @@ class MonitorScheduler:
         item.bid_count = data.bid_count
         item.end_time = data.end_time
         item.status = data.status
-        item.last_checked_at = datetime.utcnow()
-        item.updated_at = datetime.utcnow()
+        item.last_checked_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.now(timezone.utc)
 
         # Sync DealAlert prices when Yahoo price changes
         if data.win_price and data.win_price != old_win_price:
@@ -308,7 +308,7 @@ class MonitorScheduler:
         if not item.auto_adjust_interval or not item.end_time:
             return item.check_interval_seconds
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Handle timezone-aware end_time
         end = item.end_time.replace(tzinfo=None) if item.end_time.tzinfo else item.end_time
         remaining = (end - now).total_seconds()
@@ -468,7 +468,7 @@ class MonitorScheduler:
                     item.amazon_sku = None
                     item.amazon_listing_status = "delisted"
                     item.amazon_last_synced_at = None
-                    item.updated_at = datetime.utcnow()
+                    item.updated_at = datetime.now(timezone.utc)
                     db.add(StatusHistory(
                         item_id=item.id,
                         auction_id=item.auction_id,

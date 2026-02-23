@@ -416,7 +416,6 @@ class DealScanner:
                 keepa_product=kp,
                 yahoo_shipping=yahoo_shipping,
                 forwarding_cost=settings.deal_forwarding_cost,
-                inspection_fee=settings.deal_inspection_fee,
                 amazon_fee_pct=fee_pct,
                 good_rank_threshold=settings.keepa_good_rank_threshold,
             )

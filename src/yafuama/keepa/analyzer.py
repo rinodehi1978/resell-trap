@@ -391,7 +391,6 @@ def score_deal(
     keepa_product: dict[str, Any],
     yahoo_shipping: int | None = 0,
     forwarding_cost: int = 960,
-    inspection_fee: int = 0,
     amazon_fee_pct: float = 10.0,
     good_rank_threshold: int = DEFAULT_GOOD_RANK_THRESHOLD,
 ) -> DealCandidate | None:

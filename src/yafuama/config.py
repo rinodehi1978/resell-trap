@@ -51,7 +51,6 @@ class Settings(BaseSettings):
 
     # Deal Finder
     deal_forwarding_cost: int = 960       # サイズ不明時のフォールバック（100サイズ相当）
-    deal_inspection_fee: int = 0          # 廃止（システム利用料に含まれる）
     deal_system_fee: int = 100            # 無在庫1配送毎のシステム利用料 (円)
     deal_amazon_fee_pct: float = 10.0     # Amazon販売手数料率 (%)
     deal_min_gross_margin_pct: float = 25.0  # 最低粗利率 (%)

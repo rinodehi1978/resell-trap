@@ -357,12 +357,11 @@ async def deals_result_partial(
     request: Request,
     q: str = Query("", min_length=1),
     forwarding_cost: int = 0,
-    inspection_fee: int = 0,
 ):
     """Search Yahoo Auctions, match to Amazon via Keepa, calculate profit.
 
     Uses gross margin model:
-      total_cost = yahoo_price + yahoo_shipping + forwarding + inspection
+      total_cost = yahoo_price + yahoo_shipping + forwarding + system_fee
       gross_profit = amazon_sell_price - total_cost - amazon_fee
       gross_margin = gross_profit / amazon_sell_price * 100
     Filters: gross_margin >= deal_min_gross_margin_pct AND gross_profit >= deal_min_gross_profit
@@ -377,7 +376,6 @@ async def deals_result_partial(
 
     # Use config defaults if UI sent 0 (meaning "use default")
     fwd_cost = forwarding_cost if forwarding_cost > 0 else settings.deal_forwarding_cost
-    insp_fee = inspection_fee if inspection_fee > 0 else settings.deal_inspection_fee
 
     if not scraper:
         return templates.TemplateResponse("partials/deals_result.html", {
@@ -452,7 +450,6 @@ async def deals_result_partial(
                 keepa_product=kp,
                 yahoo_shipping=yahoo_shipping,
                 forwarding_cost=fwd_cost,
-                inspection_fee=insp_fee,
                 amazon_fee_pct=settings.deal_amazon_fee_pct,
                 good_rank_threshold=settings.keepa_good_rank_threshold,
             )
