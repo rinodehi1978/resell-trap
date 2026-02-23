@@ -43,6 +43,13 @@ class MonitorScheduler:
             id="alert_cleanup",
             replace_existing=True,
         )
+        self._scheduler.add_job(
+            self._retry_failed_amazon_deletions,
+            "interval",
+            seconds=600,  # 10分ごと
+            id="amazon_delete_retry",
+            replace_existing=True,
+        )
         self._scheduler.start()
         self.running = True
         logger.info("Monitor scheduler started")
@@ -415,6 +422,80 @@ class MonitorScheduler:
             db.commit()
         except Exception as e:
             logger.exception("Error in alert cleanup: %s", e)
+            db.rollback()
+        finally:
+            db.close()
+
+    async def _retry_failed_amazon_deletions(self) -> None:
+        """Retry Amazon listing deletion for ended items where deletion failed.
+
+        Covers two cases:
+        - listing_status='error': API call failed previously
+        - ended item still has amazon_sku + listing_status='active': deletion never attempted
+        """
+        from ..amazon import AmazonApiError
+        from ..main import app_state
+
+        sp_client = app_state.get("sp_api")
+        if not sp_client:
+            return
+
+        db: Session = SessionLocal()
+        try:
+            # Find ended items that still have an Amazon listing
+            stuck_items = (
+                db.query(MonitoredItem)
+                .filter(
+                    MonitoredItem.status.like("ended_%"),
+                    MonitoredItem.amazon_sku.isnot(None),
+                )
+                .all()
+            )
+            if not stuck_items:
+                return
+
+            logger.info(
+                "Amazon delete retry: %d ended item(s) still have Amazon listings",
+                len(stuck_items),
+            )
+
+            deleted_count = 0
+            for item in stuck_items:
+                try:
+                    seller_id = settings.sp_api_seller_id
+                    await sp_client.delete_listing(seller_id, item.amazon_sku)
+                    old_sku = item.amazon_sku
+                    item.amazon_sku = None
+                    item.amazon_listing_status = "delisted"
+                    item.amazon_last_synced_at = None
+                    item.updated_at = datetime.utcnow()
+                    db.add(StatusHistory(
+                        item_id=item.id,
+                        auction_id=item.auction_id,
+                        change_type="amazon_delist_auto",
+                        old_status=old_sku,
+                    ))
+                    deleted_count += 1
+                    logger.info(
+                        "Amazon delete retry: deleted SKU=%s for ended auction %s",
+                        old_sku, item.auction_id,
+                    )
+                except AmazonApiError as e:
+                    logger.warning(
+                        "Amazon delete retry: failed for SKU=%s (%s): %s",
+                        item.amazon_sku, item.auction_id, e,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Amazon delete retry: unexpected error for SKU=%s (%s): %s",
+                        item.amazon_sku, item.auction_id, e,
+                    )
+
+            if deleted_count:
+                logger.info("Amazon delete retry: successfully deleted %d listing(s)", deleted_count)
+            db.commit()
+        except Exception as e:
+            logger.exception("Error in Amazon delete retry: %s", e)
             db.rollback()
         finally:
             db.close()

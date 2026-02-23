@@ -138,18 +138,21 @@ async def delete_item(auction_id: str, db: Session = Depends(get_db)):
         from ..main import app_state
 
         sp_client = app_state.get("sp_api")
-        if sp_client:
-            try:
-                from ..amazon import AmazonApiError
+        if not sp_client:
+            raise HTTPException(
+                503, "SP-APIが利用できないためAmazon出品を削除できません。先にAmazon出品を手動で取り下げてください。"
+            )
+        try:
+            from ..amazon import AmazonApiError
 
-                await sp_client.delete_listing(
-                    settings.sp_api_seller_id, item.amazon_sku
-                )
-                logger.info("Amazon listing deleted: SKU=%s", item.amazon_sku)
-            except AmazonApiError as e:
-                raise HTTPException(
-                    502, f"Amazon出品の取り下げに失敗しました: {e}"
-                ) from e
+            await sp_client.delete_listing(
+                settings.sp_api_seller_id, item.amazon_sku
+            )
+            logger.info("Amazon listing deleted: SKU=%s", item.amazon_sku)
+        except AmazonApiError as e:
+            raise HTTPException(
+                502, f"Amazon出品の取り下げに失敗しました: {e}"
+            ) from e
 
     db.delete(item)
     db.commit()
