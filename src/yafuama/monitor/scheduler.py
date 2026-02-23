@@ -174,6 +174,7 @@ class MonitorScheduler:
             ))
 
         # Update item
+        old_win_price = item.win_price
         item.title = data.title
         item.current_price = data.current_price
         item.win_price = data.win_price
@@ -182,6 +183,10 @@ class MonitorScheduler:
         item.status = data.status
         item.last_checked_at = datetime.utcnow()
         item.updated_at = datetime.utcnow()
+
+        # Sync DealAlert prices when Yahoo price changes
+        if data.win_price and data.win_price != old_win_price:
+            self._sync_deal_alert_prices(item.auction_id, data.win_price, db)
 
         # Stop monitoring ended items
         if data.status != "active":
@@ -253,6 +258,39 @@ class MonitorScheduler:
         return change.change_type
 
     @staticmethod
+    def _sync_deal_alert_prices(
+        auction_id: str, new_yahoo_price: int, db: Session,
+    ) -> None:
+        """Update DealAlert yahoo_price and recalculate profit when Yahoo price changes."""
+        alerts = (
+            db.query(DealAlert)
+            .filter(
+                DealAlert.yahoo_auction_id == auction_id,
+                DealAlert.status.in_(["active", "listed"]),
+            )
+            .all()
+        )
+        for alert in alerts:
+            old_price = alert.yahoo_price
+            if old_price == new_yahoo_price:
+                continue
+            alert.yahoo_price = new_yahoo_price
+            # Recalculate profit:
+            # total_cost = yahoo_price + yahoo_shipping + forwarding_cost + system_fee(100)
+            system_fee = settings.deal_system_fee
+            total_cost = new_yahoo_price + alert.yahoo_shipping + alert.forwarding_cost + system_fee
+            amazon_fee = int(alert.sell_price * alert.amazon_fee_pct / 100)
+            alert.gross_profit = alert.sell_price - total_cost - amazon_fee
+            alert.gross_margin_pct = round(
+                (alert.gross_profit / alert.sell_price * 100) if alert.sell_price > 0 else 0.0, 1,
+            )
+            logger.info(
+                "DealAlert %d price synced: %s ¥%d→¥%d (profit ¥%d→¥%d)",
+                alert.id, auction_id, old_price, new_yahoo_price,
+                alert.gross_profit - (new_yahoo_price - old_price), alert.gross_profit,
+            )
+
+    @staticmethod
     def _effective_interval(item: MonitoredItem) -> float:
         """Smart interval: shorten as end_time approaches."""
         if not item.auto_adjust_interval or not item.end_time:
@@ -320,43 +358,55 @@ class MonitorScheduler:
             logger.info("Expired %d old DealAlert(s) (7+ days)", expired_count)
 
     async def _expire_ended_alerts(self) -> None:
-        """Check active DealAlerts and expire those whose Yahoo auctions have ended."""
+        """Check active/listed DealAlerts: expire ended auctions, sync prices."""
         db: Session = SessionLocal()
         try:
-            active_alerts = (
+            live_alerts = (
                 db.query(DealAlert)
-                .filter(DealAlert.status == "active")
+                .filter(DealAlert.status.in_(["active", "listed"]))
                 .all()
             )
-            if not active_alerts:
+            if not live_alerts:
                 return
 
             # Group by auction_id to avoid duplicate fetches
             alerts_by_auction: dict[str, list[DealAlert]] = {}
-            for alert in active_alerts:
+            for alert in live_alerts:
                 alerts_by_auction.setdefault(alert.yahoo_auction_id, []).append(alert)
 
             logger.info(
-                "Alert cleanup: checking %d auctions for %d active alerts",
-                len(alerts_by_auction), len(active_alerts),
+                "Alert sync: checking %d auctions for %d alerts",
+                len(alerts_by_auction), len(live_alerts),
             )
 
             expired_count = 0
+            synced_count = 0
             for auction_id, alerts in alerts_by_auction.items():
                 try:
                     data = await self.scraper.fetch_auction(auction_id)
-                    if data and data.status != "active":
+                    if not data:
+                        continue
+                    if data.status != "active":
                         for alert in alerts:
-                            alert.status = "expired"
-                            expired_count += 1
+                            if alert.status == "active":
+                                alert.status = "expired"
+                                expired_count += 1
+                    else:
+                        # Sync prices: use win_price (即決) if available, else current_price
+                        live_price = data.win_price if data.win_price and data.win_price > 0 else data.current_price
+                        if live_price and live_price > 0:
+                            for alert in alerts:
+                                if alert.yahoo_price != live_price:
+                                    self._sync_deal_alert_prices(auction_id, live_price, db)
+                                    synced_count += 1
+                                    break  # _sync handles all alerts for this auction
                 except Exception as e:
-                    logger.warning("Alert cleanup: failed to check %s: %s", auction_id, e)
+                    logger.warning("Alert sync: failed to check %s: %s", auction_id, e)
 
             if expired_count:
-                logger.info(
-                    "Alert cleanup: expired %d DealAlert(s) for ended auctions",
-                    expired_count,
-                )
+                logger.info("Alert sync: expired %d alert(s)", expired_count)
+            if synced_count:
+                logger.info("Alert sync: price-synced %d auction(s)", synced_count)
             db.commit()
         except Exception as e:
             logger.exception("Error in alert cleanup: %s", e)
