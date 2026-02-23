@@ -178,6 +178,11 @@ class MonitorScheduler:
         item.title = data.title
         item.current_price = data.current_price
         item.win_price = data.win_price
+        # Sync buy_now_price and estimated_win_price from win_price
+        # (page scraper returns buy_now_price=0; win_price is the actual BIN price)
+        if data.win_price:
+            item.buy_now_price = data.win_price
+            item.estimated_win_price = data.win_price
         item.bid_count = data.bid_count
         item.end_time = data.end_time
         item.status = data.status
