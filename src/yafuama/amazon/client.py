@@ -80,6 +80,12 @@ class SpApiClient:
 
     # --- Orders ---
 
+    async def get_order_items(self, order_id: str) -> list[dict]:
+        """Get line items for a specific order (includes SKU, ASIN, title, price)."""
+        api = self._orders_api()
+        result = await self._call(api.get_order_items, order_id)
+        return result.get("OrderItems", []) if isinstance(result, dict) else []
+
     async def get_new_orders(self, created_after: str) -> list[dict]:
         """Get orders created after the given ISO timestamp.
 

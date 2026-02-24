@@ -103,9 +103,8 @@ class OrderMonitor:
         # Build Seller Central link
         sc_url = SELLER_CENTRAL_ORDER_URL.format(order_id=order_id)
 
-        # Try to find matching MonitoredItem by looking up order items
-        # (Order-level data doesn't include SKU; we show what we can)
-        product_info = self._lookup_product_info(order, db)
+        # Get SKU from getOrderItems API and match to MonitoredItem
+        product_info = await self._lookup_product_info(order, db)
 
         # Format the notification
         if self.webhook_type == "discord":
@@ -177,6 +176,7 @@ class OrderMonitor:
         ]
 
         # Add product info if we found a matching MonitoredItem
+        yahoo_url = ""
         if product_info:
             title = product_info.get("title", "")
             sku = product_info.get("sku", "")
@@ -189,58 +189,76 @@ class OrderMonitor:
                 fields.append(
                     {"name": "SKU", "value": sku, "inline": True}
                 )
-            if yahoo_url:
-                fields.append(
-                    {"name": "ヤフオク", "value": f"[出品ページ]({yahoo_url})", "inline": True}
-                )
+
+        # Yahoo auction link prominently displayed for immediate purchase action
+        embeds = [
+            {
+                "title": "Amazon 新規注文通知",
+                "url": sc_url,
+                "color": 0x00AA00,  # Green
+                "fields": fields,
+                "footer": {"text": "ヤフアマ Order Monitor"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+
+        # Add a second embed for Yahoo purchase action (stands out more)
+        if yahoo_url:
+            embeds.append({
+                "title": ">>> ヤフオクで今すぐ購入 <<<",
+                "url": yahoo_url,
+                "color": 0xFF4500,  # Orange-red for urgency
+                "description": f"落札してください\n{yahoo_url}",
+            })
 
         return {
             "content": "@here Amazon新規注文!",
-            "embeds": [
-                {
-                    "title": "Amazon 新規注文通知",
-                    "url": sc_url,
-                    "color": 0x00AA00,  # Green
-                    "fields": fields,
-                    "footer": {"text": "ヤフアマ Order Monitor"},
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            ],
+            "embeds": embeds,
         }
 
-    @staticmethod
-    def _lookup_product_info(order: dict, db: Session) -> dict | None:
-        """Try to match order to a MonitoredItem via order items.
+    async def _lookup_product_info(self, order: dict, db: Session) -> dict | None:
+        """Match order to MonitoredItem via getOrderItems API (SKU-based)."""
+        order_id = order.get("AmazonOrderId", "")
+        if not order_id:
+            return None
 
-        The Orders API getOrders response does not include per-item SKU data.
-        We attempt a rough match by checking if there is a MonitoredItem with
-        an active Amazon listing whose ASIN or SKU relates to this order.
-
-        For a more precise match, getOrderItems would be needed, but that
-        requires an additional API call per order (rate limited).  For now,
-        we return None if we cannot determine the product.
-
-        If there is only one active MonitoredItem with an Amazon listing,
-        we assume it is the relevant product (common for small sellers).
-        """
+        # Call getOrderItems to get SKU
         try:
-            active_items = (
-                db.query(MonitoredItem)
-                .filter(
-                    MonitoredItem.amazon_sku.isnot(None),
-                    MonitoredItem.amazon_listing_status == "active",
-                )
-                .all()
-            )
-            if len(active_items) == 1:
-                item = active_items[0]
-                return {
-                    "title": item.title,
-                    "sku": item.amazon_sku,
-                    "yahoo_url": item.url,
-                    "asin": item.amazon_asin,
-                }
-        except Exception as e:
-            logger.warning("Order monitor: DB lookup failed: %s", e)
+            order_items = await self.client.get_order_items(order_id)
+        except AmazonApiError as e:
+            logger.warning("Order monitor: getOrderItems failed for %s: %s", order_id, e)
+            order_items = []
+
+        # Try to match each order item's SKU to a MonitoredItem
+        for oi in order_items:
+            sku = oi.get("SellerSKU", "")
+            asin = oi.get("ASIN", "")
+            item_title = oi.get("Title", "")
+            item_price = oi.get("ItemPrice", {}).get("Amount", "")
+
+            if sku:
+                item = db.query(MonitoredItem).filter(MonitoredItem.amazon_sku == sku).first()
+                if item:
+                    return {
+                        "title": item.title,
+                        "sku": sku,
+                        "asin": asin,
+                        "yahoo_url": item.url,
+                        "amazon_title": item_title,
+                        "item_price": item_price,
+                    }
+
+            # Fallback: match by ASIN
+            if asin:
+                item = db.query(MonitoredItem).filter(MonitoredItem.amazon_asin == asin).first()
+                if item:
+                    return {
+                        "title": item.title,
+                        "sku": item.amazon_sku or sku,
+                        "asin": asin,
+                        "yahoo_url": item.url,
+                        "amazon_title": item_title,
+                        "item_price": item_price,
+                    }
 
         return None
