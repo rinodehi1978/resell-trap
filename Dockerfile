@@ -21,7 +21,7 @@ USER appuser
 
 ENV DATABASE_URL=sqlite:////data/yafuama.db
 ENV LOG_LEVEL=INFO
-ENV PORT=8001
+ENV PORT=8080
 ENV HOST=0.0.0.0
 
 EXPOSE ${PORT}

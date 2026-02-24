@@ -39,6 +39,9 @@ def get_db() -> Session:
 def run_migrations() -> None:
     """Run Alembic migrations to bring the database up to date."""
     project_root = Path(__file__).resolve().parents[2]
+    if not (project_root / "alembic").exists():
+        # pip install in Docker: __file__ is in site-packages, fallback to WORKDIR
+        project_root = Path("/app")
     alembic_cfg = Config(str(project_root / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
     alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
