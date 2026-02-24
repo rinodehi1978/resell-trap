@@ -26,8 +26,7 @@ ENV HOST=0.0.0.0
 
 EXPOSE ${PORT}
 
-CMD gunicorn yafuama.main:app \
-    -k uvicorn.workers.UvicornWorker \
-    --bind ${HOST}:${PORT} \
-    --workers 1 \
-    --timeout 120
+CMD uvicorn yafuama.main:app \
+    --host ${HOST} \
+    --port ${PORT} \
+    --timeout-keep-alive 120
