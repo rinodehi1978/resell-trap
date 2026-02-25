@@ -685,12 +685,20 @@ class MonitorScheduler:
                 )
             except AmazonApiError:
                 pass
+            # Try lead_time PATCH (often rejected by SP-API, user sets manually)
+            try:
+                await sp_client.patch_listing_lead_time(
+                    settings.sp_api_seller_id, sku, lead_time,
+                )
+            except AmazonApiError:
+                logger.info("Auto-relist: lead_time PATCH failed for %s (manual setup needed)", sku)
 
             # Update item
             item.amazon_sku = sku
             item.amazon_listing_status = "active"
             item.amazon_last_synced_at = datetime.now(timezone.utc)
             item.amazon_margin_pct = round(margin_pct, 1)
+            item.seller_central_checklist = ""  # チェックリストリセット
 
             db.add(StatusHistory(
                 item_id=item.id, auction_id=item.auction_id,
@@ -702,6 +710,10 @@ class MonitorScheduler:
                 "Auto-relist SUCCESS: %s SKU=%s ¥%d margin=%.1f%% (relist #%d)",
                 item.auction_id, sku, sell_price, margin_pct, item.relist_count,
             )
+
+            # Discord通知: リードタイム手動設定のリマインダー
+            await self._notify_auto_relist(item, sku, sell_price, gross_profit, margin_pct, lead_time)
+
             return True
 
         except AmazonApiError as e:
@@ -712,6 +724,60 @@ class MonitorScheduler:
                 new_status=str(e)[:200],
             ))
             return False
+
+    async def _notify_auto_relist(
+        self,
+        item: MonitoredItem,
+        sku: str,
+        sell_price: int,
+        gross_profit: int,
+        margin_pct: float,
+        lead_time: int,
+    ) -> None:
+        """Send Discord notification for auto-relist with lead_time reminder."""
+        from ..notifier.webhook import send_webhook
+
+        webhook_url = settings.webhook_url
+        if not webhook_url:
+            return
+
+        sc_url = (
+            f"https://sellercentral.amazon.co.jp/inventory"
+            f"?tbla_myitable=sort:%7B%22sortOrder%22%3A%22DESCENDING%22%7D;search:{sku}"
+        )
+
+        payload = {
+            "content": "@here 自動再出品完了！リードタイムを確認してください",
+            "embeds": [
+                {
+                    "title": "自動再出品: " + (item.title or "")[:80],
+                    "url": item.url,
+                    "color": 0x00CC66,
+                    "fields": [
+                        {"name": "SKU", "value": sku, "inline": True},
+                        {"name": "販売価格", "value": f"¥{sell_price:,}", "inline": True},
+                        {"name": "利益", "value": f"¥{gross_profit:,} ({margin_pct:.1f}%)", "inline": True},
+                        {"name": "再出品回数", "value": str(item.relist_count), "inline": True},
+                        {"name": "設定リードタイム", "value": f"{lead_time}日", "inline": True},
+                    ],
+                    "footer": {"text": "ヤフアマ Auto-Relist"},
+                },
+                {
+                    "title": ">>> セラーセントラルでリードタイムを確認 <<<",
+                    "url": sc_url,
+                    "color": 0xFF9800,
+                    "description": (
+                        "SP-APIではリードタイムが反映されないことがあります。\n"
+                        f"セラーセントラルで **{lead_time}日** に設定してください。"
+                    ),
+                },
+            ],
+        }
+
+        try:
+            await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
+        except Exception as e:
+            logger.warning("Auto-relist webhook failed: %s", e)
 
     async def _retry_failed_amazon_deletions(self) -> None:
         """Retry Amazon listing deletion for ended items where deletion failed.
