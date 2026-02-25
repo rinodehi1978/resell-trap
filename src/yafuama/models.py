@@ -58,6 +58,10 @@ class MonitoredItem(Base):
     amazon_last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     seller_central_checklist: Mapped[str] = mapped_column(Text, default="")  # JSON: {"lead_time":false,"images":false,"condition":false}
 
+    # Auto-relist detection (自動再出品検知)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    relist_count: Mapped[int] = mapped_column(Integer, default=0)
+
     history: Mapped[list["StatusHistory"]] = relationship(back_populates="item", cascade="all, delete-orphan")
     notifications: Mapped[list["NotificationLog"]] = relationship(back_populates="item", cascade="all, delete-orphan")
 

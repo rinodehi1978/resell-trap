@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     discovery_deactivation_threshold: float = 0.05  # Score below which to deactivate
     anthropic_api_key: str = ""              # Claude API key (optional)
 
+    # Auto-relist detection（自動再出品検知）
+    relist_check_enabled: bool = True
+    relist_check_interval: int = 1800       # チェック間隔（秒、デフォルト30分）
+    relist_check_max_days: int = 3          # 終了後の最大監視日数
+    relist_min_margin_pct: float = 25.0     # 再出品の最低粗利率 (%)
+    relist_min_profit: int = 3000           # 再出品の最低粗利益 (円)
+
     # Series Expansion（型番シリーズ横展開）
     series_expansion_min_profit: int = 3000       # シリーズ展開トリガーの最低粗利益（円）
     series_expansion_max_siblings: int = 4        # 1型番あたりの最大兄弟生成数

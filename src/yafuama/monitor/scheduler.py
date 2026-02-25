@@ -50,6 +50,18 @@ class MonitorScheduler:
             id="amazon_delete_retry",
             replace_existing=True,
         )
+        if settings.relist_check_enabled:
+            self._scheduler.add_job(
+                self._check_relist_candidates,
+                "interval",
+                seconds=settings.relist_check_interval,
+                id="relist_check",
+                replace_existing=True,
+            )
+            logger.info(
+                "Relist check job registered (interval=%ds, max_days=%d)",
+                settings.relist_check_interval, settings.relist_check_max_days,
+            )
         self._scheduler.start()
         self.running = True
         logger.info("Monitor scheduler started")
@@ -205,6 +217,8 @@ class MonitorScheduler:
         # Stop monitoring ended items
         if data.status != "active":
             item.is_monitoring_active = False
+            if item.ended_at is None:
+                item.ended_at = datetime.now(timezone.utc)
             logger.info("Item %s ended (%s), stopping monitor", item.auction_id, data.status)
             # Expire corresponding DealAlerts
             expired_count = (
@@ -330,8 +344,10 @@ class MonitorScheduler:
 
         Keeps ended items visible for user review. Only auto-cleans
         items that have been ended for 7+ days (fallback cleanup).
+        Skips relist candidates (ended_no_winner with ASIN within check window).
         """
         cutoff = now - timedelta(days=7)
+        relist_cutoff = now - timedelta(days=settings.relist_check_max_days)
         stale = (
             db.query(MonitoredItem)
             .filter(
@@ -342,6 +358,17 @@ class MonitorScheduler:
             )
             .all()
         )
+        # Protect relist candidates from cleanup
+        if settings.relist_check_enabled:
+            stale = [
+                item for item in stale
+                if not (
+                    item.status == "ended_no_winner"
+                    and item.amazon_asin
+                    and item.ended_at
+                    and item.ended_at > relist_cutoff
+                )
+            ]
         if stale:
             for item in stale:
                 logger.info(
@@ -427,6 +454,264 @@ class MonitorScheduler:
             db.rollback()
         finally:
             db.close()
+
+    # ------------------------------------------------------------------
+    # Auto-relist detection（自動再出品検知）
+    # ------------------------------------------------------------------
+
+    async def _check_relist_candidates(self) -> None:
+        """Check ended_no_winner items for Yahoo auto-relist (自動再出品).
+
+        If a previously ended auction becomes active again:
+        1. Recalculate profitability with current Yahoo price
+        2. If still profitable → auto-create Amazon listing
+        3. Resume monitoring
+        """
+        import asyncio
+
+        db: Session = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(days=settings.relist_check_max_days)
+
+            candidates = (
+                db.query(MonitoredItem)
+                .filter(
+                    MonitoredItem.status == "ended_no_winner",
+                    MonitoredItem.amazon_asin.isnot(None),
+                    MonitoredItem.amazon_listing_status == "delisted",
+                    MonitoredItem.ended_at.isnot(None),
+                    MonitoredItem.ended_at > cutoff,
+                )
+                .all()
+            )
+            if not candidates:
+                return
+
+            logger.info(
+                "Relist check: %d candidate(s) within %d-day window",
+                len(candidates), settings.relist_check_max_days,
+            )
+
+            relisted = 0
+            skipped_profit = 0
+            for item in candidates:
+                try:
+                    data = await self.scraper.fetch_auction(item.auction_id)
+                    if not data or data.status != "active":
+                        await asyncio.sleep(0.2)
+                        continue
+
+                    # --- Relist detected! ---
+                    logger.info(
+                        "Auto-relist detected: %s (%s)",
+                        item.auction_id, item.title[:40],
+                    )
+
+                    # Refresh item data from Yahoo
+                    item.title = data.title
+                    item.current_price = data.current_price
+                    item.win_price = data.win_price
+                    if data.win_price:
+                        item.buy_now_price = data.win_price
+                        item.estimated_win_price = data.win_price
+                    item.bid_count = data.bid_count
+                    item.end_time = data.end_time
+                    item.status = "active"
+                    item.is_monitoring_active = True
+                    item.last_checked_at = now
+                    item.updated_at = now
+                    item.ended_at = None
+                    item.relist_count = (item.relist_count or 0) + 1
+
+                    db.add(StatusHistory(
+                        item_id=item.id,
+                        auction_id=item.auction_id,
+                        change_type="status_change",
+                        old_status="ended_no_winner",
+                        new_status="active",
+                    ))
+
+                    # Profitability check & auto-list
+                    listed = await self._auto_relist_amazon(item, db)
+                    if listed:
+                        relisted += 1
+                    else:
+                        skipped_profit += 1
+
+                    await asyncio.sleep(0.3)
+                except Exception as e:
+                    logger.warning(
+                        "Relist check failed for %s: %s", item.auction_id, e,
+                    )
+
+            db.commit()
+
+            if relisted:
+                logger.info("Relist check: %d item(s) relisted on Amazon", relisted)
+            if skipped_profit:
+                logger.info("Relist check: %d item(s) skipped (profit below threshold)", skipped_profit)
+
+        except Exception as e:
+            logger.exception("Error in relist check: %s", e)
+            db.rollback()
+        finally:
+            db.close()
+
+    async def _auto_relist_amazon(self, item: MonitoredItem, db: Session) -> bool:
+        """Recalculate profitability and auto-create Amazon listing.
+
+        Returns True if listing was created, False if skipped.
+        """
+        import asyncio
+
+        from ..amazon import AmazonApiError
+        from ..amazon.pricing import generate_sku
+        from ..amazon.shipping import get_pattern_by_key
+        from ..main import app_state
+
+        sp_client = app_state.get("sp_api")
+        if not sp_client:
+            logger.warning("Auto-relist: SP-API not available")
+            return False
+
+        # Prices
+        sell_price = item.amazon_price or 0
+        yahoo_price = item.estimated_win_price or item.buy_now_price or item.win_price or 0
+        if sell_price <= 0 or yahoo_price <= 0:
+            logger.info("Auto-relist: no price data for %s, skipping", item.auction_id)
+            return False
+
+        # Profit calculation
+        shipping = item.shipping_cost or 0
+        forwarding = item.forwarding_cost or settings.deal_forwarding_cost
+        fee_pct = item.amazon_fee_pct or settings.deal_amazon_fee_pct
+        amazon_fee = int(sell_price * fee_pct / 100)
+        total_cost = yahoo_price + shipping + forwarding + settings.deal_system_fee + amazon_fee
+        gross_profit = sell_price - total_cost
+        margin_pct = (gross_profit / sell_price * 100) if sell_price > 0 else 0.0
+
+        logger.info(
+            "Auto-relist profit check %s: sell=¥%d yahoo=¥%d profit=¥%d margin=%.1f%%",
+            item.auction_id, sell_price, yahoo_price, gross_profit, margin_pct,
+        )
+
+        if margin_pct < settings.relist_min_margin_pct:
+            logger.info(
+                "Auto-relist: %s margin %.1f%% < %.1f%%, skipping",
+                item.auction_id, margin_pct, settings.relist_min_margin_pct,
+            )
+            db.add(StatusHistory(
+                item_id=item.id, auction_id=item.auction_id,
+                change_type="auto_relist_skip",
+                new_status=f"margin {margin_pct:.1f}% < {settings.relist_min_margin_pct}%",
+            ))
+            return False
+
+        if gross_profit < settings.relist_min_profit:
+            logger.info(
+                "Auto-relist: %s profit ¥%d < ¥%d, skipping",
+                item.auction_id, gross_profit, settings.relist_min_profit,
+            )
+            db.add(StatusHistory(
+                item_id=item.id, auction_id=item.auction_id,
+                change_type="auto_relist_skip",
+                new_status=f"profit ¥{gross_profit} < ¥{settings.relist_min_profit}",
+            ))
+            return False
+
+        # --- Profitable → create Amazon listing ---
+        condition = item.amazon_condition or "used_very_good"
+        suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
+        sku = f"{generate_sku(item.auction_id)}-R{suffix}"
+
+        pattern = get_pattern_by_key(item.amazon_shipping_pattern or "2_3_days")
+        if not pattern:
+            pattern = get_pattern_by_key("2_3_days")
+        lead_time = pattern.lead_time_days
+
+        attributes = {
+            "condition_type": [{"value": condition}],
+            "purchasable_offer": [{
+                "marketplace_id": settings.sp_api_marketplace,
+                "currency": "JPY",
+                "our_price": [{"schedule": [{"value_with_tax": sell_price}]}],
+            }],
+            "fulfillment_availability": [
+                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
+            ],
+            "merchant_suggested_asin": [{
+                "value": item.amazon_asin,
+                "marketplace_id": settings.sp_api_marketplace,
+            }],
+            "merchant_shipping_group": [{"value": settings.shipping_template_id}],
+            "lead_time_to_ship_max_days": [{"value": lead_time}],
+        }
+        if item.amazon_condition_note:
+            attributes["condition_note"] = [
+                {"value": item.amazon_condition_note, "language_tag": "ja_JP"}
+            ]
+
+        try:
+            product_type = await sp_client.get_product_type(item.amazon_asin)
+
+            try:
+                await sp_client.create_listing(
+                    settings.sp_api_seller_id, sku, product_type, attributes,
+                    offer_only=True,
+                )
+            except AmazonApiError as e:
+                if "INVALID" in str(e):
+                    attributes.pop("lead_time_to_ship_max_days", None)
+                    await sp_client.create_listing(
+                        settings.sp_api_seller_id, sku, product_type, attributes,
+                        offer_only=True,
+                    )
+                else:
+                    raise
+
+            await asyncio.sleep(3)
+
+            # Activation PATCHes
+            try:
+                await sp_client.patch_listing_price(
+                    settings.sp_api_seller_id, sku, sell_price,
+                )
+            except AmazonApiError:
+                pass
+            try:
+                await sp_client.patch_listing_quantity(
+                    settings.sp_api_seller_id, sku, 1,
+                )
+            except AmazonApiError:
+                pass
+
+            # Update item
+            item.amazon_sku = sku
+            item.amazon_listing_status = "active"
+            item.amazon_last_synced_at = datetime.now(timezone.utc)
+            item.amazon_margin_pct = round(margin_pct, 1)
+
+            db.add(StatusHistory(
+                item_id=item.id, auction_id=item.auction_id,
+                change_type="amazon_listing",
+                new_status=f"auto_relist:{sku} ¥{sell_price} margin {margin_pct:.1f}%",
+            ))
+
+            logger.info(
+                "Auto-relist SUCCESS: %s SKU=%s ¥%d margin=%.1f%% (relist #%d)",
+                item.auction_id, sku, sell_price, margin_pct, item.relist_count,
+            )
+            return True
+
+        except AmazonApiError as e:
+            logger.error("Auto-relist SP-API error for %s: %s", item.auction_id, e)
+            db.add(StatusHistory(
+                item_id=item.id, auction_id=item.auction_id,
+                change_type="auto_relist_error",
+                new_status=str(e)[:200],
+            ))
+            return False
 
     async def _retry_failed_amazon_deletions(self) -> None:
         """Retry Amazon listing deletion for ended items where deletion failed.
