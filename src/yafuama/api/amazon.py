@@ -51,6 +51,11 @@ def _require_item(auction_id: str, db: Session) -> MonitoredItem:
 
 @router.get("/catalog/search", response_model=CatalogSearchResponse)
 async def search_catalog(keywords: str, page_size: int = 10):
+    if not keywords or not keywords.strip():
+        raise HTTPException(400, "キーワードを入力してください")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(400, "page_sizeは1〜100の範囲で指定してください")
+    keywords = keywords.strip()
     client = _get_sp_client()
     try:
         raw_items = await client.search_catalog_items(keywords, page_size=page_size)
@@ -75,6 +80,8 @@ async def search_catalog(keywords: str, page_size: int = 10):
 
 @router.get("/catalog/{asin}")
 async def get_catalog_item(asin: str):
+    if not asin or len(asin) < 10:
+        raise HTTPException(400, "正しいASINを入力してください")
     client = _get_sp_client()
     try:
         return await client.get_catalog_item(asin)
@@ -118,6 +125,10 @@ async def check_listing_restrictions(
     condition: str = "used_very_good",
 ):
     """Check if the seller can list this ASIN (brand gating, category approval, etc.)."""
+    if not asin or len(asin) < 10:
+        raise HTTPException(400, "正しいASINを入力してください")
+    if condition not in _CONDITION_MAP:
+        raise HTTPException(400, f"無効なコンディション: {condition}")
     client = _get_sp_client()
     condition_type = _CONDITION_MAP.get(condition, condition)
 
