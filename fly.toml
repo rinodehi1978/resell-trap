@@ -31,4 +31,5 @@ primary_region = "nrt"  # 東京（成田）
     port = 8080
     path = "/partials/health"
     interval = "30s"
-    timeout = "5s"
+    timeout = "15s"
+    grace_period = "60s"

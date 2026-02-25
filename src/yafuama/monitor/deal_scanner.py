@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -89,6 +90,7 @@ class DealScanner:
                     else:
                         kw.scans_since_last_deal += 1
                     scanned += 1
+                    await asyncio.sleep(0.5)  # breathe between keywords for health checks
                 except Exception as e:
                     logger.warning("Error scanning keyword '%s': %s", kw.keyword, e)
 
@@ -305,6 +307,7 @@ class DealScanner:
                 targeted_keepa[group_key] = keepa_products or []
                 searches_done += 1
                 logger.debug("Targeted Keepa search: '%s' → %d results", query, len(keepa_products or []))
+                await asyncio.sleep(0.1)  # yield to event loop for health checks
             except Exception as e:
                 logger.warning("Targeted Keepa search failed for '%s': %s", query, e)
                 fallback_listings.extend(listings)
