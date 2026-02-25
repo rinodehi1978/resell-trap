@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import DealAlert, MonitoredItem, NotificationLog, StatusHistory
+from ..models import (
+    DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem,
+    NotificationLog, StatusHistory,
+)
 from ..notifier.base import BaseNotifier
 from ..scraper.yahoo import YahooAuctionScraper
 
@@ -66,6 +69,14 @@ class MonitorScheduler:
                 "Relist check job registered (interval=%ds, max_days=%d)",
                 settings.relist_check_interval, settings.relist_check_max_days,
             )
+        self._scheduler.add_job(
+            self._data_retention_cleanup,
+            "interval",
+            seconds=86400,  # 24時間ごと
+            id="data_retention",
+            replace_existing=True,
+            max_instances=1,
+        )
         self._scheduler.start()
         self.running = True
         logger.info("Monitor scheduler started")
@@ -859,6 +870,96 @@ class MonitorScheduler:
             db.commit()
         except Exception as e:
             logger.exception("Error in Amazon delete retry: %s", e)
+            db.rollback()
+        finally:
+            db.close()
+
+    # ------------------------------------------------------------------
+    # Data retention cleanup（古いレコードの物理削除）
+    # ------------------------------------------------------------------
+
+    async def _data_retention_cleanup(self) -> None:
+        """Delete old records to prevent unbounded database growth.
+
+        Retention policy:
+        - DealAlert (expired/rejected): 90 days
+        - StatusHistory: 90 days
+        - NotificationLog: 30 days
+        - KeywordCandidate (resolved): 30 days
+        - DiscoveryLog: 90 days
+        """
+        db: Session = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            cutoff_90d = now - timedelta(days=90)
+            cutoff_30d = now - timedelta(days=30)
+            total_deleted = 0
+
+            # DealAlerts: delete expired/rejected older than 90 days
+            count = (
+                db.query(DealAlert)
+                .filter(
+                    DealAlert.status.in_(["expired", "rejected"]),
+                    DealAlert.notified_at < cutoff_90d,
+                )
+                .delete(synchronize_session=False)
+            )
+            if count:
+                logger.info("Data retention: deleted %d old DealAlert(s)", count)
+                total_deleted += count
+
+            # StatusHistory: delete older than 90 days
+            count = (
+                db.query(StatusHistory)
+                .filter(StatusHistory.recorded_at < cutoff_90d)
+                .delete(synchronize_session=False)
+            )
+            if count:
+                logger.info("Data retention: deleted %d old StatusHistory records", count)
+                total_deleted += count
+
+            # NotificationLog: delete older than 30 days
+            count = (
+                db.query(NotificationLog)
+                .filter(NotificationLog.sent_at < cutoff_30d)
+                .delete(synchronize_session=False)
+            )
+            if count:
+                logger.info("Data retention: deleted %d old NotificationLog records", count)
+                total_deleted += count
+
+            # KeywordCandidate: delete resolved (not pending) older than 30 days
+            count = (
+                db.query(KeywordCandidate)
+                .filter(
+                    KeywordCandidate.status != "pending",
+                    KeywordCandidate.created_at < cutoff_30d,
+                )
+                .delete(synchronize_session=False)
+            )
+            if count:
+                logger.info("Data retention: deleted %d old KeywordCandidate(s)", count)
+                total_deleted += count
+
+            # DiscoveryLog: delete older than 90 days
+            count = (
+                db.query(DiscoveryLog)
+                .filter(DiscoveryLog.started_at < cutoff_90d)
+                .delete(synchronize_session=False)
+            )
+            if count:
+                logger.info("Data retention: deleted %d old DiscoveryLog records", count)
+                total_deleted += count
+
+            db.commit()
+
+            if total_deleted:
+                logger.info("Data retention cleanup: %d total records deleted", total_deleted)
+            else:
+                logger.info("Data retention cleanup: no old records to delete")
+
+        except Exception as e:
+            logger.exception("Error in data retention cleanup: %s", e)
             db.rollback()
         finally:
             db.close()
