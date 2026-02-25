@@ -539,13 +539,15 @@ class MonitorScheduler:
                     else:
                         skipped_profit += 1
 
+                    # Commit per item to prevent orphaned Amazon listings on crash
+                    db.commit()
+
                     await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.warning(
                         "Relist check failed for %s: %s", item.auction_id, e,
                     )
-
-            db.commit()
+                    db.rollback()
 
             if relisted:
                 logger.info("Relist check: %d item(s) relisted on Amazon", relisted)
@@ -677,14 +679,14 @@ class MonitorScheduler:
                 await sp_client.patch_listing_price(
                     settings.sp_api_seller_id, sku, sell_price,
                 )
-            except AmazonApiError:
-                pass
+            except AmazonApiError as e:
+                logger.warning("Auto-relist: price PATCH failed for %s: %s", sku, e)
             try:
                 await sp_client.patch_listing_quantity(
                     settings.sp_api_seller_id, sku, 1,
                 )
-            except AmazonApiError:
-                pass
+            except AmazonApiError as e:
+                logger.warning("Auto-relist: quantity PATCH failed for %s: %s", sku, e)
             # Try lead_time PATCH (often rejected by SP-API, user sets manually)
             try:
                 await sp_client.patch_listing_lead_time(
