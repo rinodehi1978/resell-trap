@@ -35,6 +35,7 @@ class MonitorScheduler:
             seconds=60,  # 60秒tickで十分（実際のスクレイピング間隔はcheck_interval_seconds=300）
             id="monitor_loop",
             replace_existing=True,
+            max_instances=1,
         )
         self._scheduler.add_job(
             self._expire_ended_alerts,
@@ -42,6 +43,7 @@ class MonitorScheduler:
             seconds=1800,  # 30分ごと
             id="alert_cleanup",
             replace_existing=True,
+            max_instances=1,
         )
         self._scheduler.add_job(
             self._retry_failed_amazon_deletions,
@@ -49,6 +51,7 @@ class MonitorScheduler:
             seconds=600,  # 10分ごと
             id="amazon_delete_retry",
             replace_existing=True,
+            max_instances=1,
         )
         if settings.relist_check_enabled:
             self._scheduler.add_job(
@@ -57,6 +60,7 @@ class MonitorScheduler:
                 seconds=settings.relist_check_interval,
                 id="relist_check",
                 replace_existing=True,
+                max_instances=1,
             )
             logger.info(
                 "Relist check job registered (interval=%ds, max_days=%d)",
@@ -84,6 +88,7 @@ class MonitorScheduler:
             seconds=interval_seconds,
             id="deal_scan",
             replace_existing=True,
+            max_instances=1,
         )
         logger.info("Deal scanner job registered (interval=%ds)", interval_seconds)
 
@@ -95,6 +100,7 @@ class MonitorScheduler:
             seconds=interval_seconds,
             id="ai_discovery",
             replace_existing=True,
+            max_instances=1,
         )
         logger.info("AI Discovery job registered (interval=%ds)", interval_seconds)
 
@@ -106,6 +112,7 @@ class MonitorScheduler:
             seconds=interval_seconds,
             id="listing_sync",
             replace_existing=True,
+            max_instances=1,
         )
         logger.info("Listing sync job registered (interval=%ds)", interval_seconds)
 
@@ -117,6 +124,7 @@ class MonitorScheduler:
             seconds=interval_seconds,
             id="order_monitor",
             replace_existing=True,
+            max_instances=1,
         )
         logger.info("Order monitor job registered (interval=%ds)", interval_seconds)
 

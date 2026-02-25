@@ -97,6 +97,9 @@ class DealScanner:
             # Auto-cleanup underperforming keywords
             self._cleanup_keywords(db)
 
+            # Free ORM identity map to reduce memory
+            db.expire_all()
+
             logger.info("Scan cycle complete: %d/%d keywords scanned", scanned, len(keywords))
             db.commit()
         except Exception as e:
@@ -455,14 +458,14 @@ class DealScanner:
         if not models:
             return
 
-        # 既存キーワード・候補を取得して重複排除
+        # 既存キーワード・候補を取得して重複排除（スカラー値のみ取得）
         existing_kws = {
-            row[0].lower()
-            for row in db.query(WatchedKeyword.keyword).all()
+            val.lower()
+            for (val,) in db.query(WatchedKeyword.keyword).all()
         }
         existing_candidates = {
-            row[0].lower()
-            for row in db.query(KeywordCandidate.keyword)
+            val.lower()
+            for (val,) in db.query(KeywordCandidate.keyword)
             .filter(KeywordCandidate.status.notin_(["rejected"]))
             .all()
         }

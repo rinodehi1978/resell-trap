@@ -32,6 +32,7 @@ class SpApiClient:
         self._marketplace = Marketplaces.JP
         self._marketplace_id = settings.sp_api_marketplace
         self._fee_cache: dict[str, float] = {}  # ASIN → referral fee %
+        self._fee_cache_max: int = 200
         self._last_fee_request_at: float = 0.0
 
     async def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -452,6 +453,8 @@ class SpApiClient:
                 if fee.get("FeeType") == "ReferralFee":
                     fee_amount = float(fee["FeeAmount"]["Amount"])
                     fee_pct = round(fee_amount / price * 100, 1)
+                    if len(self._fee_cache) >= self._fee_cache_max:
+                        self._fee_cache.clear()
                     self._fee_cache[asin] = fee_pct
                     logger.debug(
                         "ASIN %s referral fee: %.1f%% (¥%d on ¥%d)",

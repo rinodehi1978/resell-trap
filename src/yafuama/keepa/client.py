@@ -26,6 +26,9 @@ def keepa_minutes_to_datetime(minutes: int) -> datetime:
     return _KEEPA_EPOCH + timedelta(minutes=minutes)
 
 
+_SEARCH_CACHE_MAX = 50  # Max cached search results to prevent OOM
+
+
 class KeepaClient:
     """Async Keepa API client for Amazon.co.jp product data."""
 
@@ -123,6 +126,8 @@ class KeepaClient:
                 tokens_left=self._tokens_left,
             )
 
+        if len(self._search_cache) >= _SEARCH_CACHE_MAX:
+            self._search_cache.clear()
         self._search_cache[cache_key] = products
         return products
 

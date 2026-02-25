@@ -167,6 +167,9 @@ class DiscoveryEngine:
                     result.candidates_generated = len(demand_candidates)
                     log_entry.strategy_breakdown = json.dumps(strategy_counts)
 
+            # Free memory from validation phase before continuing
+            db.expire_all()
+
             # 5. Rejection learning: analyze all rejections and update matcher
             try:
                 from .rejection_analyzer import analyze_all_rejections
@@ -324,12 +327,16 @@ class DiscoveryEngine:
 
     def _update_scores(self, db) -> int:
         """Update performance_score for all keywords and auto-deactivate underperformers."""
-        keywords = db.query(WatchedKeyword).all()
+        keywords = db.query(WatchedKeyword).filter(WatchedKeyword.is_active == True).all()  # noqa: E712
         deactivated = 0
 
         for kw in keywords:
-            # Recompute score from alerts
-            alerts = kw.alerts
+            # Recompute score from alerts (eager load to avoid N+1)
+            alerts = (
+                db.query(DealAlert)
+                .filter(DealAlert.keyword_id == kw.id)
+                .all()
+            )
             kw.performance_score = compute_performance_score(kw, alerts)
 
             # Auto-delete underperforming AI keywords

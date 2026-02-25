@@ -97,9 +97,10 @@ class KeywordInsights:
 
 
 def analyze_deal_history(db: Session) -> KeywordInsights:
-    """Main entry point: analyze all DealAlert records for patterns."""
-    alerts = db.query(DealAlert).all()
-    keywords = db.query(WatchedKeyword).all()
+    """Main entry point: analyze recent DealAlert records for patterns."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    alerts = db.query(DealAlert).filter(DealAlert.notified_at > cutoff).all()
+    keywords = db.query(WatchedKeyword).filter(WatchedKeyword.is_active == True).all()  # noqa: E712
 
     kw_map = {kw.id: kw for kw in keywords}
 
