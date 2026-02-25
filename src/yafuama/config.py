@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     order_monitor_interval: int = 180  # ポーリング間隔（秒、デフォルト3分）
     order_webhook_url: str = ""  # 注文専用webhook（空ならwebhook_urlと共用）
 
+    # Health Monitor (サーバー監視通知)
+    health_webhook_url: str = ""  # 監視専用Discord webhook
+    alert_email_to: str = ""  # ダウン通知メール送信先
+    alert_email_from: str = ""  # 送信元Gmail
+    alert_email_password: str = ""  # Gmailアプリパスワード
+
     # Auth
     api_key: str = ""  # Set to enable API key auth; empty = no auth
 

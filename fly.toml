@@ -19,7 +19,7 @@ primary_region = "nrt"  # 東京（成田）
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  memory = "1gb"
 
 [mounts]
   source = "yafuama_data"

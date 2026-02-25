@@ -124,6 +124,14 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to load matcher overrides: %s", e)
 
     logger.info("ヤフアマ started")
+
+    # Notify startup (detects restarts after crashes)
+    try:
+        from .notifier.health import notify_startup
+        await notify_startup()
+    except Exception as e:
+        logger.warning("Startup notification failed: %s", e)
+
     yield
 
     # Shutdown
