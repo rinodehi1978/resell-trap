@@ -366,6 +366,11 @@ class DealScanner:
         yahoo_price = buy_now
         yahoo_title = yr.title if hasattr(yr, "title") else yr.get("title", "")
 
+        # タイトルにジャンク等のNGワードが含まれる商品を除外
+        _TITLE_EXCLUDE_WORDS = ("ジャンク",)
+        if any(w in yahoo_title for w in _TITLE_EXCLUDE_WORDS):
+            return None
+
         yr_shipping = yr.shipping_cost if hasattr(yr, "shipping_cost") else yr.get("shipping_cost")
         # None = 着払い/送料不明 → score_dealでサイズベース転送料を使用
         yahoo_shipping = yr_shipping
