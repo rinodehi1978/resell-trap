@@ -33,12 +33,24 @@
 
   <a href="/items/{{ item.auction_id }}" class="block px-4 py-3 hover:bg-gray-50">
     <div class="flex items-start gap-3">
-      {# 画像 #}
-      {% if item.image_url %}
-      <img src="{{ item.image_url }}" alt="" class="w-16 h-16 object-cover rounded flex-shrink-0">
-      {% else %}
-      <div class="w-16 h-16 bg-gray-200 rounded flex-shrink-0"></div>
-      {% endif %}
+      {# Yahoo + Amazon 画像 #}
+      <div class="flex gap-1 flex-shrink-0">
+        <span onclick="event.preventDefault(); event.stopPropagation(); window.open('{{ item.url }}', '_blank')" title="Yahoo" class="cursor-pointer">
+          {% if item.image_url %}
+          <img src="{{ item.image_url }}" alt="Yahoo" class="w-14 h-14 object-cover rounded border border-red-200 bg-gray-100"
+               onerror="this.style.display='none'">
+          {% else %}
+          <div class="w-14 h-14 bg-gray-200 rounded border border-red-200"></div>
+          {% endif %}
+        </span>
+        {% if item.amazon_asin %}
+        <span onclick="event.preventDefault(); event.stopPropagation(); window.open('https://amazon.co.jp/dp/{{ item.amazon_asin }}', '_blank')" title="Amazon" class="cursor-pointer">
+          <img src="https://m.media-amazon.com/images/P/{{ item.amazon_asin }}.01._SCMZZZZZZZ_SX80_.jpg"
+               alt="Amazon" class="w-14 h-14 object-cover rounded border border-orange-200 bg-gray-100"
+               onerror="this.style.display='none'">
+        </span>
+        {% endif %}
+      </div>
 
       {# メイン情報 #}
       <div class="min-w-0 flex-1">

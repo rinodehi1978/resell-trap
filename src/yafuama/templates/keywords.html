@@ -255,6 +255,70 @@
   {% endif %}
 </div>
 
+<!-- Monitored items -->
+{% if monitored_items %}
+<div class="bg-white rounded-lg shadow-sm border">
+  <div class="px-4 py-3 border-b flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-gray-900">出品モニタリング中</h2>
+    <a href="/items" class="text-xs text-blue-600 hover:underline">すべて表示</a>
+  </div>
+  <div class="divide-y">
+    {% for item in monitored_items %}
+    {% set yahoo_cost = item.estimated_win_price or item.current_price %}
+    {% set sell_price = item.amazon_price or 0 %}
+    {% set amazon_fee = (sell_price * item.amazon_fee_pct / 100)|round|int if sell_price else 0 %}
+    {% set total_cost = yahoo_cost + item.shipping_cost + item.forwarding_cost + 100 + amazon_fee %}
+    {% set gross_profit = sell_price - total_cost if sell_price else 0 %}
+    {% set margin_pct = ((gross_profit / sell_price * 100)|round(1)) if sell_price > 0 else 0 %}
+    <div class="px-4 py-3 bg-blue-50 border-l-4 border-blue-400">
+      <div class="flex items-start gap-3">
+        <div class="flex gap-1 flex-shrink-0">
+          <a href="{{ item.url }}" target="_blank" title="Yahoo">
+            <img src="{{ item.image_url or '' }}"
+                 alt="Yahoo" class="w-14 h-14 object-cover rounded border border-red-200 bg-gray-100"
+                 onerror="this.style.display='none'">
+          </a>
+          {% if item.amazon_asin %}
+          <a href="https://amazon.co.jp/dp/{{ item.amazon_asin }}" target="_blank" title="Amazon">
+            <img src="https://m.media-amazon.com/images/P/{{ item.amazon_asin }}.01._SCMZZZZZZZ_SX80_.jpg"
+                 alt="Amazon" class="w-14 h-14 object-cover rounded border border-orange-200 bg-gray-100"
+                 onerror="this.style.display='none'">
+          </a>
+          {% endif %}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-xs font-medium text-gray-900 truncate" title="{{ item.title }}">
+            {{ item.title or item.auction_id }}
+          </div>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs">
+            <span class="text-gray-500">仕入: <span class="font-semibold">&yen;{{ "{:,}".format(yahoo_cost) }}</span></span>
+            {% if sell_price > 0 %}
+            <span class="text-gray-400">&rarr;</span>
+            <span class="text-gray-500">売価: <span class="font-semibold text-purple-700">&yen;{{ "{:,}".format(sell_price) }}</span></span>
+            <span class="text-gray-400">&rarr;</span>
+            <span class="font-semibold {% if gross_profit > 0 %}text-green-700{% else %}text-red-600{% endif %}">
+              &yen;{{ "{:,}".format(gross_profit) }}
+              <span class="font-normal text-[10px]">({{ margin_pct }}%)</span>
+            </span>
+            {% endif %}
+          </div>
+          <div class="flex items-center gap-2 mt-0.5">
+            <span class="px-1.5 py-0.5 text-[10px] rounded font-medium bg-green-100 text-green-700">{{ item.status }}</span>
+            {% if item.amazon_listing_status == 'active' %}
+            <span class="px-1.5 py-0.5 text-[10px] rounded font-medium bg-purple-100 text-purple-700">Amazon出品中</span>
+            {% endif %}
+          </div>
+        </div>
+        <a href="/items/{{ item.auction_id }}" class="px-2.5 py-1 text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 rounded font-medium flex-shrink-0">
+          詳細
+        </a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <!-- Listing modal -->
 <div id="listing-modal" class="fixed inset-0 z-50 hidden">
   <div class="absolute inset-0 bg-black/50" onclick="closeListingModal()"></div>

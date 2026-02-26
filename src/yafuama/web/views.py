@@ -235,6 +235,14 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
     last_log = db.query(DiscoveryLog).order_by(DiscoveryLog.id.desc()).first()
     from ..config import settings as app_settings
 
+    # Monitored items for bottom section
+    monitored_items = (
+        db.query(MonitoredItem)
+        .filter(MonitoredItem.is_monitoring_active == True)  # noqa: E712
+        .order_by(MonitoredItem.created_at.desc())
+        .all()
+    )
+
     return templates.TemplateResponse("keywords.html", {
         "request": request,
         "active_page": "keywords",
@@ -247,6 +255,7 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         "ai_deals": ai_deals,
         "last_discovery_log": last_log,
         "anthropic_configured": bool(app_settings.anthropic_api_key),
+        "monitored_items": monitored_items,
     })
 
 
