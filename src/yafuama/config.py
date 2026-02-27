@@ -59,8 +59,8 @@ class Settings(BaseSettings):
     deal_min_gross_profit: int = 3000     # 最低粗利益 (円)
     deal_scan_interval: int = 600         # 自動スキャン間隔 (秒、デフォルト10分)
     deal_default_shipping: int = 700        # 送料不明時のデフォルト送料 (円)
-    deal_scan_max_pages: int = 3           # Yahoo検索の最大ページ数
-    deal_max_keepa_searches_per_keyword: int = 10  # キーワードあたりの最大Keepa個別検索数
+    deal_scan_max_pages: int = 1           # Yahoo検索の最大ページ数
+    deal_max_keepa_searches_per_keyword: int = 3  # キーワードあたりの最大Keepa個別検索数
     deal_min_price_for_keepa_search: int = 2000    # 個別Keepa検索の最低即決価格（円）
     # 深層検証（利益率50%超の候補をヤフオク説明文で再検証）
     # NOTE: enabled/max_per_cycleは将来実装予定（現在はmargin_thresholdのみ使用）
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     discovery_token_budget: int = 10         # Max Keepa tokens per discovery cycle
     discovery_min_deals: int = 5             # Min DealAlerts before AI starts generating
     discovery_auto_add_threshold: float = 0.6  # Confidence threshold for auto-adding
-    discovery_max_ai_keywords: int = 50      # Cap on active AI keywords
+    discovery_max_ai_keywords: int = 20      # Cap on active AI keywords
     discovery_deactivation_scans: int = 10   # Scans before deactivation check
     discovery_deactivation_threshold: float = 0.05  # Score below which to deactivate
     anthropic_api_key: str = ""              # Claude API key (optional)
