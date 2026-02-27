@@ -487,7 +487,7 @@ async function addKeyword(e) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({keyword: keyword}),
     });
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
     window.location.reload();
   } catch (e) {
     msgEl.textContent = e.message;
@@ -508,7 +508,7 @@ async function deleteKeyword(id, triggerBtn) {
   if (triggerBtn) triggerBtn.textContent = '...';
   try {
     const resp = await fetch('/api/keywords/' + id, {method: 'DELETE'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
     const row = document.getElementById('kw-row-' + id);
     if (row) { row.style.transition = 'opacity 0.3s'; row.style.opacity = '0'; setTimeout(() => row.remove(), 300); }
   } catch (e) {
@@ -549,7 +549,7 @@ async function triggerDiscovery() {
   msgEl.textContent = '';
   try {
     const resp = await fetch('/api/discovery/trigger', {method: 'POST'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
     const data = await resp.json();
     msgEl.textContent = `候補 ${data.candidates_generated}件生成、${data.keywords_added}件追加`;
     msgEl.className = 'text-xs mt-2 text-green-600';
@@ -572,7 +572,7 @@ async function generateSeedKeywords() {
   msgEl.textContent = '';
   try {
     const resp = await fetch('/api/discovery/seed', {method: 'POST'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
     const data = await resp.json();
     seedData = data.suggestions;
     renderSeedList(seedData);
@@ -636,7 +636,7 @@ async function applySeedKeywords() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({keywords: keywords}),
     });
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
     const data = await resp.json();
     btn.textContent = data.added + '件登録完了';
     setTimeout(() => window.location.reload(), 1500);
@@ -791,7 +791,7 @@ async function rejectAlert(alertId, reason, triggerBtn, note) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
     });
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
     // Remove popover and fade out row
     document.querySelectorAll('.delete-confirm-pop').forEach(el => el.remove());
     const row = document.getElementById('alert-row-' + alertId);

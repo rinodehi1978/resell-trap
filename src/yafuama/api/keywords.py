@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -152,7 +153,12 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
     except Exception:
         pass  # Non-critical: don't fail the rejection itself
 
-    db.commit()
+    try:
+        db.commit()
+    except OperationalError as e:
+        db.rollback()
+        logger.warning("DB locked during reject: %s", e)
+        raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
     # Reload matcher overrides with new patterns
     try:
@@ -171,7 +177,12 @@ def delete_alert(alert_id: int, db: Session = Depends(get_db)):
     if not alert:
         raise HTTPException(404, "Alert not found")
     db.delete(alert)
-    db.commit()
+    try:
+        db.commit()
+    except OperationalError as e:
+        db.rollback()
+        logger.warning("DB locked during delete: %s", e)
+        raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
 
 @router.post("/alerts/{alert_id}/list", status_code=201)
