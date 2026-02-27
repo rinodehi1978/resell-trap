@@ -56,6 +56,24 @@ ABBREVIATION_MAP = {
 # Condition / packaging variants
 CONDITION_SUFFIXES = ["中古", "ジャンク", "BOX", "セット", "本体", "限定"]
 
+# Low-quality tokens to exclude from keyword generation
+# These are common in listing titles but have no product specificity
+_LOW_QUALITY_TOKENS = frozenset({
+    # Color names
+    "ブラック", "黒", "白", "ホワイト", "シルバー", "ゴールド", "レッド", "赤",
+    "ブルー", "青", "グリーン", "グレー", "ピンク", "パープル", "オレンジ",
+    "black", "white", "silver", "gold", "red", "blue", "green", "grey", "gray",
+    "bk", "wh",
+    # Condition / state
+    "新品", "中古", "未使用", "美品", "良品", "並品", "動作確認済み", "動作保証",
+    "動作品", "完動品", "現状品", "訳あり", "難あり",
+    # Generic packaging / quantity
+    "セット", "まとめ", "本体", "限定", "付属品", "箱付き", "箱なし",
+    "1個", "2個", "3個",
+    # Size / generic specs
+    "型", "インチ", "サイズ",
+})
+
 
 @dataclass
 class CandidateProposal:
@@ -107,14 +125,18 @@ def generate_brand_expansion(
     """Strategy 1: Combine high-performing brands with product type tokens."""
     candidates = []
 
-    # Get top brands (avg_profit > 3000, 2+ deals)
+    # Get top brands (avg_profit > 3000, 3+ deals, total profit > 15000)
     good_brands = [
         b for b in insights.brand_patterns
-        if b.avg_profit >= 3000 and b.deal_count >= 2
+        if b.avg_profit >= 3000 and b.deal_count >= 3 and b.total_profit >= 15000
     ]
 
-    # Get top product type tokens
-    top_types = [p.product_type for p in insights.product_type_patterns[:15]]
+    # Get top product type tokens, excluding low-quality tokens
+    top_types = [
+        p.product_type for p in insights.product_type_patterns[:15]
+        if p.product_type not in _LOW_QUALITY_TOKENS
+        and p.product_type.lower() not in _LOW_QUALITY_TOKENS
+    ]
 
     # Find parent keyword ID for lineage
     brand_parent_map: dict[str, int] = {}
@@ -158,10 +180,14 @@ def generate_title_decomp(
     """Strategy 2: Recombine high-scoring title tokens into new keywords."""
     candidates = []
 
-    # Get top tokens (score > 1.0)
+    # Get top tokens (score > 1.0), filtering low-quality and generic tokens
     top_tokens = [
         (token, score) for token, score in insights.title_tokens.items()
-        if score >= 1.0 and token.lower() not in KNOWN_BRANDS
+        if score >= 1.0
+        and token.lower() not in KNOWN_BRANDS
+        and token not in _LOW_QUALITY_TOKENS
+        and token.lower() not in _LOW_QUALITY_TOKENS
+        and len(token) >= 3
     ][:20]
 
     if len(top_tokens) < 2:
@@ -202,7 +228,7 @@ def generate_category_keywords(
 
     good_brands = [
         b for b in insights.brand_patterns
-        if b.avg_profit >= 3000 and b.deal_count >= 2
+        if b.avg_profit >= 3000 and b.deal_count >= 3 and b.total_profit >= 15000
     ]
 
     brand_parent_map: dict[str, int] = {}

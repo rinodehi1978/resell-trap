@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     discovery_auto_add_threshold: float = 0.6  # Confidence threshold for auto-adding
     discovery_max_ai_keywords: int = 20      # Cap on active AI keywords
     discovery_deactivation_scans: int = 10   # Scans before deactivation check
-    discovery_deactivation_threshold: float = 0.05  # Score below which to deactivate
+    discovery_deactivation_threshold: float = 0.15  # Score below which to deactivate
     anthropic_api_key: str = ""              # Claude API key (optional)
 
     # Auto-relist detection（自動再出品検知）

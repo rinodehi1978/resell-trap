@@ -250,12 +250,16 @@ def extract_product_types(alerts: list[DealAlert]) -> list[ProductTypePattern]:
             seen.add(t)
             token_deals[t].append(alert)
 
+    total_alerts = len(alerts) if alerts else 1
     patterns = []
     for token, deals in token_deals.items():
         if len(deals) < 3:
             continue
         avg_profit = sum(d.gross_profit for d in deals) / len(deals)
-        score = len(deals) * min(avg_profit / 5000, 2.0)
+        # Rarity penalty: tokens appearing in too many deals are generic
+        freq_rate = len(deals) / max(total_alerts, 1)
+        rarity = max(1.0 - freq_rate, 0.1)
+        score = len(deals) * min(avg_profit / 5000, 2.0) * rarity
         patterns.append(ProductTypePattern(
             product_type=token,
             deal_count=len(deals),
