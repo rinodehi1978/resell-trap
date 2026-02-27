@@ -578,6 +578,7 @@ def _extract_product_types(tokens: list[str]) -> set[int]:
 # ---------------------------------------------------------------------------
 
 _SUBMODEL_WORDS = frozenset({
+    # Generic sub-model variants
     "slim", "すりむ",
     "extra", "えくすとら",
     "plus", "ぷらす",
@@ -592,6 +593,21 @@ _SUBMODEL_WORDS = frozenset({
     "deluxe", "でらっくす",
     "compact", "こんぱくと",
     "standard", "すたんだーど",
+    # Dyson cordless vacuum variants (V6-V15)
+    "fluffy", "ふらっふぃ",
+    "absolute", "あぶそりゅーと",
+    "animal", "あにまる",
+    "motorhead", "もーたーへっど",
+    "origin", "おりじん",
+    "complete", "こんぷりーと",
+    "totalclean",
+    # Dyson hair products
+    "supersonic", "すーぱーそにっく",
+    "airwrap", "えあらっぷ",
+    "corrale", "こらーる",
+    # GoPro edition variants
+    "creator", "くりえいたー",
+    "session", "せっしょん",
 })
 
 
