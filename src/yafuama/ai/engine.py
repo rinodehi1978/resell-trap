@@ -12,8 +12,9 @@ from ..database import SessionLocal
 from ..matcher import keywords_are_similar
 from ..models import DealAlert, DiscoveryLog, KeywordCandidate, WatchedKeyword
 from .analyzer import analyze_deal_history, compute_performance_score
-from .generator import generate_all
+from .generator import generate_all, _get_existing_keywords
 from .llm import get_llm_suggestions
+from .suggest import generate_suggest_crossmatch
 from .validator import ValidationResult, validate_candidate
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,14 @@ class DiscoveryEngine:
                     )
                     candidates.extend(llm_candidates)
 
+                # Strategy 7: Suggest cross-match (Amazon/Yahoo)
+                existing_kws = _get_existing_keywords(db)
+                suggest_candidates = await generate_suggest_crossmatch(
+                    self._scraper, existing_kws, insights,
+                    max_count=settings.suggest_max_candidates,
+                )
+                candidates.extend(suggest_candidates)
+
                 # Save candidates to DB
                 strategy_counts: dict[str, int] = {}
                 for c in candidates:
@@ -146,13 +155,24 @@ class DiscoveryEngine:
                     "Discovery: not enough deals (%d < %d), skipping history-based generation",
                     insights.total_deals, settings.discovery_min_deals,
                 )
-                # Still generate demand-based candidates even without deal history
+                # Still generate demand-based + suggest candidates without deal history
+                cold_candidates: list = []
                 if demand_products:
-                    from .generator import generate_demand, _get_existing_keywords
+                    from .generator import generate_demand
                     existing = _get_existing_keywords(db)
-                    demand_candidates = generate_demand(demand_products, existing)
+                    cold_candidates.extend(generate_demand(demand_products, existing))
+
+                # Suggest cross-match works even without deal history (cold-start)
+                existing_kws = _get_existing_keywords(db)
+                suggest_candidates = await generate_suggest_crossmatch(
+                    self._scraper, existing_kws, insights,
+                    max_count=settings.suggest_max_candidates,
+                )
+                cold_candidates.extend(suggest_candidates)
+
+                if cold_candidates:
                     strategy_counts: dict[str, int] = {}
-                    for c in demand_candidates:
+                    for c in cold_candidates:
                         kc = KeywordCandidate(
                             keyword=c.keyword,
                             strategy=c.strategy,
@@ -164,7 +184,7 @@ class DiscoveryEngine:
                         db.add(kc)
                         strategy_counts[c.strategy] = strategy_counts.get(c.strategy, 0) + 1
                     db.flush()
-                    result.candidates_generated = len(demand_candidates)
+                    result.candidates_generated = len(cold_candidates)
                     log_entry.strategy_breakdown = json.dumps(strategy_counts)
 
             # Free memory from validation phase before continuing

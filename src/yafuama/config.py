@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     demand_finder_min_used_price: int = 10000 # 中古最低価格（円）
     demand_finder_max_results: int = 50       # Product Finder最大取得件数
 
+    # Suggest Cross-Match（Amazon/Yahooサジェストクロスマッチ）
+    suggest_crossmatch_enabled: bool = True
+    suggest_max_seeds: int = 10              # 1サイクルあたりの最大シードブランド数
+    suggest_max_candidates: int = 15         # 1サイクルあたりの最大候補数
+
     @property
     def anthropic_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
