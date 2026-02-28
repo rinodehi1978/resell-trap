@@ -924,17 +924,11 @@ class MatchResult:
             return False  # Hard reject: both have model numbers but different
         if self.accessory_conflict:
             return False  # Hard reject: one is accessory/part, other is main
-        # 型番一致 → マッチ（最強シグナル、スコア閾値スキップ）
+        # 型番一致 → マッチ（最強シグナル）
         if self.model_match or self.keepa_model_match:
             return True
-        # 片方/両方に型番なし → 従来のスコア制にフォールバック
-        threshold = MATCH_THRESHOLD
-        try:
-            from .matcher_overrides import overrides
-            threshold += overrides.threshold_adjustment
-        except ImportError:
-            pass
-        return self.score >= threshold
+        # 型番一致なし → リジェクト（型番の一致が同一商品判定に必須）
+        return False
 
     def passes_strict_check(self) -> bool:
         """Stricter validation for high-margin deals (50%+).

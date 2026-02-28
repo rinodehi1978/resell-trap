@@ -101,7 +101,7 @@ class TestCatalogSearch:
     def test_search_with_results(self, client, mock_sp_client):
         mock_sp_client.search_catalog_items = AsyncMock(return_value=[
             {
-                "asin": "B08XYZ",
+                "asin": "B08XYZABCD",
                 "summaries": [{"itemName": "Pokemon Card", "brand": "Nintendo"}],
                 "images": [{"images": [{"link": "https://img.example.com/1.jpg"}]}],
             }
@@ -110,7 +110,7 @@ class TestCatalogSearch:
         assert resp.status_code == 200
         items = resp.json()["items"]
         assert len(items) == 1
-        assert items[0]["asin"] == "B08XYZ"
+        assert items[0]["asin"] == "B08XYZABCD"
         assert items[0]["title"] == "Pokemon Card"
 
     def test_search_sp_api_error(self, client, mock_sp_client):
@@ -121,8 +121,8 @@ class TestCatalogSearch:
 
 class TestCatalogItem:
     def test_get_catalog_item(self, client, mock_sp_client):
-        mock_sp_client.get_catalog_item = AsyncMock(return_value={"asin": "B08XYZ"})
-        resp = client.get("/api/amazon/catalog/B08XYZ")
+        mock_sp_client.get_catalog_item = AsyncMock(return_value={"asin": "B08XYZABCD"})
+        resp = client.get("/api/amazon/catalog/B08XYZABCD")
         assert resp.status_code == 200
 
 
@@ -131,7 +131,7 @@ class TestCreateListing:
         _create_monitored_item(client, mock_scraper)
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
             "shipping_cost": 800,
         })
@@ -260,10 +260,10 @@ class TestListingRestrictions:
     def test_no_restrictions(self, client, mock_sp_client):
         """ASIN with no restrictions → is_listable=True."""
         mock_sp_client.get_listing_restrictions = AsyncMock(return_value=[])
-        resp = client.get("/api/amazon/restrictions/B08XYZ")
+        resp = client.get("/api/amazon/restrictions/B08XYZABCD")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["asin"] == "B08XYZ"
+        assert data["asin"] == "B08XYZABCD"
         assert data["is_listable"] is True
         assert data["restrictions"] == []
 
@@ -279,7 +279,7 @@ class TestListingRestrictions:
                 }],
             }
         ])
-        resp = client.get("/api/amazon/restrictions/B08XYZ")
+        resp = client.get("/api/amazon/restrictions/B08XYZABCD")
         assert resp.status_code == 200
         data = resp.json()
         assert data["is_listable"] is False
@@ -298,7 +298,7 @@ class TestListingRestrictions:
         ])
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
         })
         assert resp.status_code == 403
@@ -312,7 +312,7 @@ class TestListingRestrictions:
         mock_sp_client.get_listing_restrictions = AsyncMock(return_value=[])
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
             "shipping_cost": 800,
         })
@@ -322,7 +322,7 @@ class TestListingRestrictions:
     def test_custom_condition_param(self, client, mock_sp_client):
         """Restriction check with specific condition type."""
         mock_sp_client.get_listing_restrictions = AsyncMock(return_value=[])
-        resp = client.get("/api/amazon/restrictions/B08XYZ?condition=used_good")
+        resp = client.get("/api/amazon/restrictions/B08XYZABCD?condition=used_good")
         assert resp.status_code == 200
         assert resp.json()["is_listable"] is True
 
@@ -345,7 +345,7 @@ class TestShippingPatterns:
         _create_monitored_item(client, mock_scraper)
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
             "shipping_cost": 800,
             "shipping_pattern": "1_2_days",
@@ -365,7 +365,7 @@ class TestShippingPatterns:
         _create_monitored_item(client, mock_scraper)
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
             "shipping_cost": 800,
             "shipping_pattern": "3_7_days",
@@ -379,7 +379,7 @@ class TestShippingPatterns:
         _create_monitored_item(client, mock_scraper)
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
             "shipping_cost": 800,
         })
@@ -393,7 +393,7 @@ class TestShippingPatterns:
         _create_monitored_item(client, mock_scraper)
         resp = client.post("/api/amazon/listings", json={
             "auction_id": "1219987808",
-            "asin": "B08XYZ",
+            "asin": "B08XYZABCD",
             "estimated_win_price": 3000,
             "shipping_pattern": "invalid_pattern",
         })
