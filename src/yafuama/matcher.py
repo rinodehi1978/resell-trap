@@ -194,6 +194,8 @@ _PRODUCT_SYNONYMS: dict[str, str] = {
     "ぷりんたー": "printer", "printer": "printer",
     "かめら": "camera", "camera": "camera",
     "れんず": "lens", "lens": "lens",
+    # GoPro series name
+    "ひーろー": "hero", "hero": "hero",
     # Condition / edition (useful for distinguishing products)
     "でじたる": "digital", "digital": "digital",
     "わいやれす": "wireless", "wireless": "wireless",
@@ -368,6 +370,7 @@ def extract_product_info(title: str) -> tuple[str | None, set[str], list[str]]:
     tokens = tokenize(norm)
     tokens = _split_known_brands(tokens)
     canon = _canonicalize_tokens(tokens)
+    canon = _merge_product_number_tokens(canon)
     brand = _extract_brand(canon)
     models = _extract_model_numbers(canon)
     key_tokens = [
@@ -384,6 +387,7 @@ def extract_model_numbers_from_text(text: str) -> set[str]:
     tokens = tokenize(norm)
     tokens = _split_known_brands(tokens)
     canon = _canonicalize_tokens(tokens)
+    canon = _merge_product_number_tokens(canon)
     return _extract_model_numbers(canon)
 
 
@@ -464,6 +468,34 @@ _SPEC_UNIT_RE = re.compile(
 )
 
 
+# Product-line names that should merge with an adjacent number token
+# to form a model number (e.g. "hero" + "12" → "hero12")
+_MERGE_PREFIX_WORDS = frozenset({"hero"})
+
+
+def _merge_product_number_tokens(tokens: list[str]) -> list[str]:
+    """Merge product line names with adjacent number tokens.
+
+    Example: ["gopro", "hero", "12", "black"] → ["gopro", "hero12", "black"]
+    Handles GoPro Hero series where katakana "ヒーロー12" splits into
+    "hero" + "12" after synonym replacement.
+    """
+    result: list[str] = []
+    i = 0
+    while i < len(tokens):
+        if (
+            i + 1 < len(tokens)
+            and tokens[i] in _MERGE_PREFIX_WORDS
+            and tokens[i + 1].isdigit()
+        ):
+            result.append(tokens[i] + tokens[i + 1])
+            i += 2
+        else:
+            result.append(tokens[i])
+            i += 1
+    return result
+
+
 def _extract_model_numbers(tokens: list[str]) -> set[str]:
     """Extract tokens that look like model numbers (contain both letters and digits).
 
@@ -483,6 +515,32 @@ def _extract_model_numbers(tokens: list[str]) -> set[str]:
     return models
 
 
+def _models_color_suffix_match(models_a: set[str], models_b: set[str]) -> bool:
+    """Check if models match after ignoring color code suffixes.
+
+    Handles cases like HP04 vs HP04IBN, SV18 vs SV18FF, TP07 vs TP07WS
+    where the suffix is a 2+ letter color/SKU code appended to the base model.
+
+    Rules:
+    - One model must be a prefix of the other
+    - The remaining suffix must be purely alphabetical (no digits)
+    - Suffix must be 2+ characters (single-letter suffixes like 'K' may be variants)
+    """
+    for a in models_a:
+        for b in models_b:
+            if a == b:
+                continue
+            if len(b) > len(a) and b.startswith(a):
+                suffix = b[len(a):]
+                if suffix.isalpha() and len(suffix) >= 2:
+                    return True
+            if len(a) > len(b) and a.startswith(b):
+                suffix = a[len(b):]
+                if suffix.isalpha() and len(suffix) >= 2:
+                    return True
+    return False
+
+
 def _extract_brand(tokens: list[str]) -> str | None:
     """Find the first known brand among canonicalized tokens."""
     for t in tokens:
@@ -496,7 +554,7 @@ _MODEL_PREFIX_RE = re.compile(r"^([a-z]+)")
 
 # Known prefix pairs: series name + model code for one product
 # e.g. Dyson "V8" + "SV10K" → same product
-_PAIRED_PREFIXES = [{"v", "sv"}, {"cf", "cfi"}, {"eh", "er"}]
+_PAIRED_PREFIXES = [{"v", "sv"}, {"cf", "cfi"}, {"eh", "er"}, {"hero", "chdhx"}]
 
 
 def _count_model_families(models: set[str]) -> int:
@@ -610,6 +668,45 @@ _SUBMODEL_WORDS = frozenset({
     "session", "せっしょん",
 })
 
+# Map katakana submodel words → canonical English form for comparison
+_SUBMODEL_CANONICAL: dict[str, str] = {
+    "すりむ": "slim", "えくすとら": "extra", "ぷらす": "plus",
+    "ぷろ": "pro", "らいと": "lite", "みに": "mini",
+    "まっくす": "max", "うるとら": "ultra", "ねお": "neo",
+    "あどばんす": "advance", "ぷれみあむ": "premium",
+    "でらっくす": "deluxe", "こんぱくと": "compact",
+    "すたんだーど": "standard",
+    "ふらっふぃ": "fluffy", "あぶそりゅーと": "absolute",
+    "あにまる": "animal", "もーたーへっど": "motorhead",
+    "おりじん": "origin", "こんぷりーと": "complete",
+    "すーぱーそにっく": "supersonic", "えあらっぷ": "airwrap",
+    "こらーる": "corrale",
+    "くりえいたー": "creator", "せっしょん": "session",
+}
+
+
+def _extract_submodel_hits(tokens: list[str]) -> set[str]:
+    """Extract submodel words from tokens, with substring matching for
+    concatenated katakana (e.g. "くりえいたーえでぃしょん" contains "くりえいたー").
+
+    Also checks adjacent token pairs for compound words (e.g. "total"+"clean" → "totalclean").
+    Returns canonical (English) forms so "くりえいたー" and "creator" match.
+    """
+    found: set[str] = set()
+    for t in tokens:
+        if t in _SUBMODEL_WORDS:
+            found.add(_SUBMODEL_CANONICAL.get(t, t))
+        elif len(t) >= 6:
+            for sw in _SUBMODEL_WORDS:
+                if len(sw) >= 4 and sw in t:
+                    found.add(_SUBMODEL_CANONICAL.get(sw, sw))
+    # Check adjacent token pairs for compound submodel words
+    for i in range(len(tokens) - 1):
+        combined = tokens[i] + tokens[i + 1]
+        if combined in _SUBMODEL_WORDS:
+            found.add(_SUBMODEL_CANONICAL.get(combined, combined))
+    return found
+
 
 def _submodel_conflict(y_tokens: list[str], a_tokens: list[str]) -> bool:
     """Check if sub-model variant words differ between the two titles.
@@ -617,11 +714,12 @@ def _submodel_conflict(y_tokens: list[str], a_tokens: list[str]) -> bool:
     Only triggers when at least one side has model numbers (to avoid
     false positives on generic titles).
     """
-    y_sub = set(y_tokens) & _SUBMODEL_WORDS
-    a_sub = set(a_tokens) & _SUBMODEL_WORDS
-    # Only flag conflict when at least one side has submodel words
-    # AND they are not identical (symmetric difference is non-empty)
-    if not y_sub and not a_sub:
+    y_sub = _extract_submodel_hits(y_tokens)
+    a_sub = _extract_submodel_hits(a_tokens)
+    # Only flag conflict when BOTH sides have submodel words but different.
+    # One side omitting the variant name (y_sub empty) is not a conflict
+    # — the listing simply doesn't mention the variant.
+    if not y_sub or not a_sub:
         return False
     return y_sub != a_sub
 
@@ -664,6 +762,13 @@ _ACCESSORY_WORDS = frozenset({
     "ぶらし", "brush", "ろーらー", "roller", "へっど", "head",
     # Remote
     "りもこん", "remote",
+    # Housing / case (action cameras)
+    "はうじんぐ", "housing", "防水ケース", "ぼうすいけーす",
+    # Mods / modules (GoPro etc.)
+    "mod", "もっど", "もじゅーる", "module",
+    # Selfie stick / tripod
+    "自撮り棒", "じどりぼう", "せるふぃーすてぃっく",
+    "三脚", "さんきゃく", "tripod",
     # Only / sole (signals partial item)
     "のみ", "only", "単品", "たんぴん", "単体", "たんたい",
 })
@@ -817,6 +922,8 @@ class MatchResult:
             return False  # Hard reject: different brand = different product
         if self.model_conflict:
             return False  # Hard reject: both have model numbers but different
+        if self.accessory_conflict:
+            return False  # Hard reject: one is accessory/part, other is main
         # 型番一致 → マッチ（最強シグナル、スコア閾値スキップ）
         if self.model_match or self.keepa_model_match:
             return True
@@ -874,6 +981,10 @@ def match_products(yahoo_title: str, amazon_title: str) -> MatchResult:
     y_canon = _canonicalize_tokens(y_tokens)
     a_canon = _canonicalize_tokens(a_tokens)
 
+    # 4.5. Merge product line names with adjacent numbers (e.g. "hero"+"12" → "hero12")
+    y_canon = _merge_product_number_tokens(y_canon)
+    a_canon = _merge_product_number_tokens(a_canon)
+
     score = 0.0
 
     # --- Model number comparison (strongest signal) ---
@@ -884,6 +995,10 @@ def match_products(yahoo_title: str, amazon_title: str) -> MatchResult:
 
     if y_models and a_models:
         if y_models & a_models:
+            model_match = True
+            score += 0.50
+        elif _models_color_suffix_match(y_models, a_models):
+            # e.g. HP04 vs HP04IBN, SV18FF vs SV18 — color code suffix only
             model_match = True
             score += 0.50
         else:
