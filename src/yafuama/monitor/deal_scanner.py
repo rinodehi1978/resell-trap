@@ -156,6 +156,11 @@ class DealScanner:
                 return []
             new_deals = await self._scan_keyword(kw, db)
             kw.last_scanned_at = datetime.now(timezone.utc)
+            kw.total_scans += 1
+            if new_deals:
+                kw.scans_since_last_deal = 0
+            else:
+                kw.scans_since_last_deal += 1
             db.commit()
             return new_deals
         except Exception as e:

@@ -36,6 +36,13 @@ def _kw_to_response(kw: WatchedKeyword, db: Session) -> dict:
         updated_at=kw.updated_at,
         notes=kw.notes,
         alert_count=count,
+        source=kw.source,
+        parent_keyword_id=kw.parent_keyword_id,
+        performance_score=kw.performance_score,
+        total_scans=kw.total_scans,
+        total_deals_found=kw.total_deals_found,
+        confidence=kw.confidence,
+        auto_deactivated_at=kw.auto_deactivated_at,
     )
 
 
