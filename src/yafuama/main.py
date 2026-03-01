@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
         logger.info("Amazon listing sync enabled (interval=3600s)")
 
     # Amazon order monitor (注文通知)
-    if "sp_api" in app_state and settings.order_monitor_enabled and settings.webhook_url:
+    if "sp_api" in app_state and settings.order_monitor_enabled and (settings.order_webhook_url or settings.webhook_url):
         from .amazon.order_monitor import OrderMonitor
 
         order_monitor = OrderMonitor(
