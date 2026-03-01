@@ -64,6 +64,38 @@
 {% endif %}
 
 
+<!-- Pending Candidates -->
+{% if discovery_available and pending_candidates %}
+<div class="bg-white rounded-lg shadow-sm border mb-4">
+  <div class="px-4 py-3 border-b flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-gray-900">承認待ちキーワード候補 ({{ pending_candidates|length }}件)</h2>
+    <button onclick="cleanupCandidates()" class="text-xs text-red-600 hover:underline">古い候補を一括削除</button>
+  </div>
+  <div class="divide-y max-h-80 overflow-y-auto" id="candidates-list">
+    {% for c in pending_candidates %}
+    <div class="px-4 py-2 flex items-center justify-between hover:bg-gray-50" id="candidate-{{ c.id }}">
+      <div class="min-w-0 flex-1 mr-3">
+        <div class="text-sm font-medium text-gray-900">{{ c.keyword }}</div>
+        <div class="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5">
+          <span class="px-1 py-0.5 rounded
+            {% if c.status == 'validated' %}bg-green-100 text-green-700{% else %}bg-gray-100 text-gray-600{% endif %}">
+            {{ c.status }}
+          </span>
+          <span>{{ c.strategy }}</span>
+          <span>信頼度 {{ "%.0f"|format(c.confidence * 100) }}%</span>
+          {% if c.reasoning %}<span class="truncate max-w-[200px]">{{ c.reasoning }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="flex items-center gap-1 flex-shrink-0">
+        <button onclick="approveCandidate({{ c.id }})" class="px-2 py-1 text-xs bg-green-100 text-green-700 hover:bg-green-200 rounded">承認</button>
+        <button onclick="rejectCandidate({{ c.id }})" class="px-2 py-1 text-xs bg-red-100 text-red-600 hover:bg-red-200 rounded">却下</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <!-- AI Seed Keywords (cold start) -->
 {% if keywords|length < 5 and anthropic_configured %}
 <div class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg shadow-sm border border-amber-200 p-4 mb-4">
@@ -1275,5 +1307,34 @@ document.querySelectorAll('input[name="shipping_pattern"]').forEach(r => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeListingModal();
 });
+
+// Candidate management
+async function approveCandidate(id) {
+  try {
+    const resp = await fetch(`/api/discovery/candidates/${id}/approve`, {method: 'POST'});
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    const el = document.getElementById(`candidate-${id}`);
+    if (el) { el.style.opacity = '0.3'; el.innerHTML = '<div class="px-4 py-2 text-xs text-green-600">承認済み</div>'; }
+  } catch (e) { alert(e.message); }
+}
+
+async function rejectCandidate(id) {
+  try {
+    const resp = await fetch(`/api/discovery/candidates/${id}/reject`, {method: 'POST'});
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
+    const el = document.getElementById(`candidate-${id}`);
+    if (el) { el.style.opacity = '0.3'; el.innerHTML = '<div class="px-4 py-2 text-xs text-red-500">却下済み</div>'; }
+  } catch (e) { alert(e.message); }
+}
+
+async function cleanupCandidates() {
+  if (!confirm('7日以上前の候補とバーコード等の低品質候補を一括削除しますか？')) return;
+  try {
+    const resp = await fetch('/api/discovery/candidates/cleanup', {method: 'POST'});
+    const data = await resp.json();
+    alert(`${data.rejected}件を削除しました（残り${data.remaining_pending}件）`);
+    window.location.reload();
+  } catch (e) { alert(e.message); }
+}
 </script>
 {% endblock %}

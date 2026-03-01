@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..matcher import is_apparel, match_products
-from ..models import DealAlert, MonitoredItem, NotificationLog, StatusHistory, WatchedKeyword
+from ..models import DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem, NotificationLog, StatusHistory, WatchedKeyword
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,25 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         .all()
     )
 
+    # Discovery stats for dashboard
+    discovery_logs = (
+        db.query(DiscoveryLog)
+        .filter(DiscoveryLog.status == "completed")
+        .order_by(DiscoveryLog.id.desc())
+        .limit(24)
+        .all()
+    )
+    discovery_logs.reverse()  # oldest first for chart
+    ai_keyword_count = db.query(WatchedKeyword).filter(WatchedKeyword.source != "manual").count()
+    pending_candidates = db.query(KeywordCandidate).filter(
+        KeywordCandidate.status.in_(["pending", "validated"])
+    ).count()
+    discovery_stats = {
+        "ai_keywords": ai_keyword_count,
+        "pending_candidates": pending_candidates,
+        "logs": discovery_logs,
+    }
+
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "active_page": "dashboard",
@@ -95,6 +114,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "scheduler_running": scheduler is not None and scheduler.running,
         "scanner_stats": scanner_stats,
         "recent_deals": recent_deals,
+        "discovery_stats": discovery_stats,
     })
 
 
@@ -243,6 +263,15 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         .all()
     )
 
+    # Pending candidates for approval UI
+    pending_candidates = (
+        db.query(KeywordCandidate)
+        .filter(KeywordCandidate.status.in_(["pending", "validated"]))
+        .order_by(KeywordCandidate.confidence.desc())
+        .limit(20)
+        .all()
+    )
+
     return templates.TemplateResponse("keywords.html", {
         "request": request,
         "active_page": "keywords",
@@ -256,6 +285,7 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         "last_discovery_log": last_log,
         "anthropic_configured": bool(app_settings.anthropic_api_key),
         "monitored_items": monitored_items,
+        "pending_candidates": pending_candidates,
     })
 
 

@@ -92,6 +92,56 @@
 </div>
 {% endif %}
 
+<!-- AI Discovery & Keepa Token Stats -->
+{% if scanner_stats.enabled %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+  <!-- Discovery Status -->
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <h2 class="text-sm font-semibold text-gray-900 mb-3">AI Discovery</h2>
+    <div class="grid grid-cols-3 gap-4">
+      <div>
+        <div class="text-2xl font-bold text-purple-600">{{ discovery_stats.ai_keywords }}</div>
+        <div class="text-xs text-gray-500 mt-1">AIキーワード</div>
+      </div>
+      <div>
+        <div class="text-2xl font-bold text-amber-600">{{ discovery_stats.pending_candidates }}</div>
+        <div class="text-xs text-gray-500 mt-1">承認待ち候補</div>
+      </div>
+      <div>
+        <div class="text-2xl font-bold text-blue-600">
+          {% if discovery_stats.logs %}{{ discovery_stats.logs[-1].keywords_added }}{% else %}0{% endif %}
+        </div>
+        <div class="text-xs text-gray-500 mt-1">直近追加数</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keepa Token Usage Chart -->
+  <div class="bg-white rounded-lg shadow-sm border p-4">
+    <h2 class="text-sm font-semibold text-gray-900 mb-3">Keepaトークン消費 (直近24サイクル)</h2>
+    {% if discovery_stats.logs %}
+    <div class="flex items-end gap-0.5 h-16">
+      {% for log in discovery_stats.logs %}
+      {% set max_tokens = 15 %}
+      {% set bar_height = [[(log.keepa_tokens_used / max_tokens * 100), 100] | min, 5] | max if log.keepa_tokens_used > 0 else 2 %}
+      <div class="flex-1 rounded-t transition-colors
+        {% if log.keepa_tokens_used >= 10 %}bg-red-400{% elif log.keepa_tokens_used >= 5 %}bg-amber-400{% else %}bg-green-400{% endif %}"
+        style="height: {{ bar_height }}%"
+        title="{{ log.started_at.strftime('%m/%d %H:%M') }}: {{ log.keepa_tokens_used }}トークン / 生成{{ log.candidates_generated }} / 追加{{ log.keywords_added }}">
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex justify-between text-[10px] text-gray-400 mt-1">
+      <span>{% if discovery_stats.logs %}{{ discovery_stats.logs[0].started_at.strftime('%m/%d %H:%M') }}{% endif %}</span>
+      <span>{% if discovery_stats.logs %}{{ discovery_stats.logs[-1].started_at.strftime('%m/%d %H:%M') }}{% endif %}</span>
+    </div>
+    {% else %}
+    <div class="text-sm text-gray-400 text-center py-4">データなし</div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <!-- 最近の出品商品 -->
 <div class="bg-white rounded-lg shadow-sm border">
   <div class="px-4 py-3 border-b flex items-center justify-between">
