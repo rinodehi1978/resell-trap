@@ -142,7 +142,7 @@ class TestSynonyms:
 
 class TestGenerateDemand:
     def test_generates_from_model_field(self):
-        """Products with model field generate brand+model keywords."""
+        """Products with long model (4+ chars) generate model-only keywords."""
         products = [
             {
                 "model": "WH-1000XM4",
@@ -153,7 +153,8 @@ class TestGenerateDemand:
         ]
         candidates = generate_demand(products, set(), max_count=10)
         assert len(candidates) == 1
-        assert candidates[0].keyword == "Sony WH-1000XM4"
+        # Long model (10 chars) → model only, no brand
+        assert candidates[0].keyword == "WH-1000XM4"
         assert candidates[0].strategy == "demand"
         assert candidates[0].confidence == 0.80
 
@@ -194,7 +195,8 @@ class TestGenerateDemand:
                 "stats": {"salesRankDrops30": 10},
             },
         ]
-        existing = {"sony wh-1000xm4"}
+        # Model-only format (4+ chars → no brand)
+        existing = {"wh-1000xm4"}
         candidates = generate_demand(products, existing, max_count=10)
         assert len(candidates) == 0
 

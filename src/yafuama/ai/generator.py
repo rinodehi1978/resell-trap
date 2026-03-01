@@ -310,6 +310,121 @@ def generate_synonyms(
     return candidates[:max_count]
 
 
+# ---------------------------------------------------------------------------
+# Brand name forms for Yahoo Auction search
+# canonical → (Japanese, English)
+# ---------------------------------------------------------------------------
+_BRAND_BOTH_FORMS: dict[str, tuple[str, str]] = {
+    "nintendo": ("任天堂", "Nintendo"),
+    "sony": ("ソニー", "SONY"),
+    "playstation": ("プレイステーション", "PlayStation"),
+    "microsoft": ("マイクロソフト", "Microsoft"),
+    "sega": ("セガ", "SEGA"),
+    "bandai": ("バンダイ", "BANDAI"),
+    "konami": ("コナミ", "KONAMI"),
+    "capcom": ("カプコン", "CAPCOM"),
+    "apple": ("Apple", "Apple"),
+    "samsung": ("サムスン", "Samsung"),
+    "panasonic": ("パナソニック", "Panasonic"),
+    "sharp": ("シャープ", "SHARP"),
+    "toshiba": ("東芝", "TOSHIBA"),
+    "hitachi": ("日立", "HITACHI"),
+    "canon": ("キヤノン", "Canon"),
+    "nikon": ("ニコン", "Nikon"),
+    "olympus": ("オリンパス", "OLYMPUS"),
+    "fujifilm": ("富士フイルム", "FUJIFILM"),
+    "casio": ("カシオ", "CASIO"),
+    "epson": ("エプソン", "EPSON"),
+    "bose": ("Bose", "Bose"),
+    "jbl": ("JBL", "JBL"),
+    "sennheiser": ("ゼンハイザー", "Sennheiser"),
+    "audio-technica": ("オーディオテクニカ", "audio-technica"),
+    "dyson": ("ダイソン", "Dyson"),
+    "irobot": ("アイロボット", "iRobot"),
+    "braun": ("ブラウン", "BRAUN"),
+    "philips": ("フィリップス", "Philips"),
+    "daikin": ("ダイキン", "DAIKIN"),
+    "makita": ("マキタ", "Makita"),
+    "mitsubishi": ("三菱", "三菱"),
+    "buffalo": ("バッファロー", "BUFFALO"),
+    "logicool": ("ロジクール", "Logicool"),
+    "anker": ("Anker", "Anker"),
+    "pioneer": ("パイオニア", "Pioneer"),
+    "tiger": ("タイガー", "TIGER"),
+    "zojirushi": ("象印", "象印"),
+    "tefal": ("ティファール", "T-fal"),
+    "delonghi": ("デロンギ", "DeLonghi"),
+    "iris ohyama": ("アイリスオーヤマ", "IRIS OHYAMA"),
+    "balmuda": ("バルミューダ", "BALMUDA"),
+    "roomba": ("ルンバ", "Roomba"),
+    "shure": ("Shure", "Shure"),
+    "gopro": ("GoPro", "GoPro"),
+    "lego": ("レゴ", "LEGO"),
+    "twinbird": ("ツインバード", "TWINBIRD"),
+    "elecom": ("エレコム", "ELECOM"),
+}
+
+# Cache: canonical brand → preferred Yahoo search form (populated by resolve_brand_preference)
+brand_preference_cache: dict[str, str] = {}
+
+
+def format_model_keyword(brand: str | None, model: str) -> str:
+    """Format keyword for Yahoo Auction search.
+
+    - Model 4+ chars → model only (型番だけで商品特定可能)
+    - Model ≤3 chars → preferred brand name + model
+    """
+    if not brand:
+        return model
+    if len(model) >= 4:
+        return model
+
+    # Look up preferred form (dynamic cache > static Japanese default)
+    preferred = brand_preference_cache.get(brand)
+    if not preferred:
+        forms = _BRAND_BOTH_FORMS.get(brand)
+        if forms:
+            preferred = forms[0]  # Default: Japanese form
+        else:
+            preferred = brand
+    return f"{preferred} {model}"
+
+
+async def resolve_brand_preference(scraper, brand: str) -> str:
+    """Check Yahoo search counts for Japanese vs English brand name.
+
+    Results are cached module-wide for reuse across scan cycles.
+    """
+    if brand in brand_preference_cache:
+        return brand_preference_cache[brand]
+
+    forms = _BRAND_BOTH_FORMS.get(brand)
+    if not forms:
+        brand_preference_cache[brand] = brand
+        return brand
+
+    ja_name, en_name = forms
+    if ja_name == en_name:
+        brand_preference_cache[brand] = ja_name
+        return ja_name
+
+    try:
+        ja_results = await scraper.search(ja_name, page=1)
+        en_results = await scraper.search(en_name, page=1)
+        ja_count = len(ja_results) if ja_results else 0
+        en_count = len(en_results) if en_results else 0
+        winner = ja_name if ja_count >= en_count else en_name
+        logger.info(
+            "Brand preference resolved: %s → %s (JA '%s': %d, EN '%s': %d)",
+            brand, winner, ja_name, ja_count, en_name, en_count,
+        )
+    except Exception:
+        winner = ja_name  # Default to Japanese on error
+
+    brand_preference_cache[brand] = winner
+    return winner
+
+
 _SERIES_DECOMPOSE_RE = re.compile(r"^([a-z]+)(\d+)([a-z]*)$")
 
 
@@ -373,7 +488,7 @@ def generate_series_expansion(
                 if sibling_num <= 0:
                     continue
                 sibling_model = f"{prefix}{sibling_num}{suffix}"
-                keyword = f"{brand} {sibling_model}" if brand else sibling_model
+                keyword = format_model_keyword(brand, sibling_model)
 
                 if keyword.lower() in existing:
                     continue
@@ -482,8 +597,8 @@ def generate_demand(
         # Clean brand name for Yahoo searchability
         brand = _clean_brand(brand)
 
-        # ブランド + 型番でキーワード生成
-        keyword = f"{brand} {model}".strip() if brand else model
+        # 型番フォーマット: 長い型番はブランド不要、短い型番はブランド付き
+        keyword = format_model_keyword(brand, model) if brand else model
 
         # Skip keywords that are too short to be useful
         if len(keyword) < 4:

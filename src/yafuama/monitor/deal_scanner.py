@@ -254,7 +254,7 @@ class DealScanner:
 
             # 型番シリーズ横展開: 利益Deal発見時に兄弟モデル候補を自動生成
             if deal.gross_profit >= settings.series_expansion_min_profit:
-                self._enqueue_series_candidates(deal, kw, db)
+                await self._enqueue_series_candidates(deal, kw, db)
 
             new_deals.append({
                 "yahoo_title": deal.yahoo_title,
@@ -488,14 +488,30 @@ class DealScanner:
 
         return best_deal
 
-    def _enqueue_series_candidates(self, deal, kw, db) -> None:
+    async def _enqueue_series_candidates(self, deal, kw, db) -> None:
         """利益Deal発見時に兄弟モデルのKeywordCandidateを即座にDB登録。"""
-        from ..ai.generator import _decompose_model, _guess_step
+        from ..ai.generator import (
+            _decompose_model,
+            _guess_step,
+            format_model_keyword,
+            resolve_brand_preference,
+        )
         from ..models import KeywordCandidate
 
         brand, models, _ = extract_product_info(deal.yahoo_title)
         if not models:
             return
+
+        # 短い型番が含まれる場合、ブランド名のYahoo検索優先形式を事前解決
+        if brand:
+            needs_brand_resolve = False
+            for m in models:
+                parts = _decompose_model(m)
+                if parts and len(parts[0]) + 1 + len(parts[2]) < 4:
+                    needs_brand_resolve = True
+                    break
+            if needs_brand_resolve:
+                await resolve_brand_preference(self._scraper, brand)
 
         # 既存キーワード・候補を取得して重複排除（スカラー値のみ取得）
         existing_kws = {
@@ -523,7 +539,7 @@ class DealScanner:
                 if sibling_num <= 0:
                     continue
                 sibling_model = f"{prefix}{sibling_num}{suffix}"
-                keyword = f"{brand} {sibling_model}" if brand else sibling_model
+                keyword = format_model_keyword(brand, sibling_model)
 
                 if keyword.lower() in existing:
                     continue
