@@ -124,7 +124,7 @@
             <div class="text-gray-500 text-[10px]">Amazon売価</div>
             <div class="flex items-center gap-1">
               <span id="price-display" class="font-semibold text-purple-700">&yen;{{ "{:,}".format(sell_price) }}</span>
-              {% if item.amazon_sku %}
+              {% if item.amazon_sku or item.amazon_listing_status == 'delisted' %}
               <button onclick="showPriceEdit()" id="price-edit-btn" class="text-[10px] text-gray-400 hover:text-blue-600" title="価格変更">&#9998;</button>
               {% endif %}
             </div>

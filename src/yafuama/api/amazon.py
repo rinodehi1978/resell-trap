@@ -434,32 +434,38 @@ async def delete_listing(auction_id: str, db: Session = Depends(get_db)):
 
 @router.patch("/listings/{auction_id}/price")
 async def update_listing_price(auction_id: str, body: dict, db: Session = Depends(get_db)):
-    """Update Amazon listing price via SP-API and sync DB."""
-    client = _get_sp_client()
+    """Update Amazon listing price via SP-API and sync DB.
+
+    If the item is delisted (no SKU), only updates the DB price
+    so the user can adjust it before re-listing.
+    """
     item = _require_item(auction_id, db)
-    if not item.amazon_sku:
-        raise HTTPException(404, "Amazon出品がありません")
 
     new_price = body.get("price")
     if not new_price or not isinstance(new_price, (int, float)) or new_price <= 0:
         raise HTTPException(400, "正しい価格を入力してください")
     new_price = int(new_price)
 
-    try:
-        await client.patch_listing_price(settings.sp_api_seller_id, item.amazon_sku, new_price)
-    except AmazonApiError as e:
-        raise HTTPException(502, f"価格変更に失敗: {e}") from e
+    # If listing is active (has SKU), also update via SP-API
+    if item.amazon_sku:
+        client = _get_sp_client()
+        try:
+            await client.patch_listing_price(settings.sp_api_seller_id, item.amazon_sku, new_price)
+        except AmazonApiError as e:
+            raise HTTPException(502, f"価格変更に失敗: {e}") from e
 
-    # Feeds API: セラーセントラルの在庫管理システムにも価格を反映
-    try:
-        await client.submit_price_feed(settings.sp_api_seller_id, item.amazon_sku, new_price)
-        logger.info("Price feed submitted for %s (¥%d)", item.amazon_sku, new_price)
-    except AmazonApiError:
-        logger.warning("Price feed failed for %s (non-critical)", item.amazon_sku)
+        # Feeds API: セラーセントラルの在庫管理システムにも価格を反映
+        try:
+            await client.submit_price_feed(settings.sp_api_seller_id, item.amazon_sku, new_price)
+            logger.info("Price feed submitted for %s (¥%d)", item.amazon_sku, new_price)
+        except AmazonApiError:
+            logger.warning("Price feed failed for %s (non-critical)", item.amazon_sku)
+    elif not item.amazon_asin:
+        raise HTTPException(404, "Amazon出品情報がありません")
 
     old_price = item.amazon_price
     item.amazon_price = new_price
-    item.amazon_last_synced_at = datetime.now(timezone.utc)
+    item.amazon_last_synced_at = datetime.now(timezone.utc) if item.amazon_sku else item.amazon_last_synced_at
     item.updated_at = datetime.now(timezone.utc)
 
     db.add(StatusHistory(
