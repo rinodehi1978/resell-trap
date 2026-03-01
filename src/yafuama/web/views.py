@@ -263,6 +263,31 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         .all()
     )
 
+    # Attach relist skip reason to delisted items (latest auto_relist_skip history)
+    delisted_ids = [m.id for m in monitored_items if m.amazon_listing_status == "delisted"]
+    relist_skip_map: dict[int, str] = {}
+    if delisted_ids:
+        from sqlalchemy import func
+        skip_subq = (
+            db.query(
+                StatusHistory.item_id,
+                func.max(StatusHistory.id).label("max_id"),
+            )
+            .filter(
+                StatusHistory.item_id.in_(delisted_ids),
+                StatusHistory.change_type == "auto_relist_skip",
+            )
+            .group_by(StatusHistory.item_id)
+            .subquery()
+        )
+        skip_rows = (
+            db.query(StatusHistory)
+            .join(skip_subq, StatusHistory.id == skip_subq.c.max_id)
+            .all()
+        )
+        for sh in skip_rows:
+            relist_skip_map[sh.item_id] = sh.new_status or ""
+
     # Pending candidates for approval UI
     pending_candidates = (
         db.query(KeywordCandidate)
@@ -285,6 +310,7 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         "last_discovery_log": last_log,
         "anthropic_configured": bool(app_settings.anthropic_api_key),
         "monitored_items": monitored_items,
+        "relist_skip_map": relist_skip_map,
         "pending_candidates": pending_candidates,
     })
 

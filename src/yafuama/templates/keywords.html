@@ -338,6 +338,13 @@
             <span class="px-1.5 py-0.5 text-[10px] rounded font-medium bg-green-100 text-green-700">{{ item.status }}</span>
             {% if item.amazon_listing_status == 'active' %}
             <span class="px-1.5 py-0.5 text-[10px] rounded font-medium bg-purple-100 text-purple-700">Amazon出品中</span>
+            {% elif item.amazon_listing_status == 'delisted' %}
+            <span class="px-1.5 py-0.5 text-[10px] rounded font-medium bg-orange-100 text-orange-700">Amazon取下げ</span>
+            {% if relist_skip_map.get(item.id) %}
+            <span class="text-[10px] text-orange-600" title="自動再出品スキップ理由">⚠ {{ relist_skip_map[item.id] }}</span>
+            {% endif %}
+            {% elif item.amazon_listing_status == 'error' %}
+            <span class="px-1.5 py-0.5 text-[10px] rounded font-medium bg-red-100 text-red-700">Amazonエラー</span>
             {% endif %}
           </div>
         </div>
