@@ -17,119 +17,6 @@
   {% endif %}
 </div>
 
-<!-- AI Discovery panel -->
-{% if discovery_available %}
-<div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg shadow-sm border border-purple-200 p-4 mb-4">
-  <div class="flex items-center justify-between mb-3">
-    <div class="flex items-center gap-2">
-      <span class="text-purple-600 font-bold text-sm">AIキーワード発見</span>
-      {% if discovery_available %}
-      <span class="px-1.5 py-0.5 text-[10px] bg-green-100 text-green-700 rounded-full">稼働中</span>
-      {% else %}
-      <span class="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-500 rounded-full">停止</span>
-      {% endif %}
-    </div>
-    {% if discovery_available %}
-    <button onclick="triggerDiscovery()" id="trigger-discovery-btn"
-            class="px-3 py-1.5 bg-purple-600 text-white text-xs rounded-md hover:bg-purple-700">
-      手動実行
-    </button>
-    {% endif %}
-  </div>
-  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-    <div>
-      <div class="text-lg font-bold text-purple-700">{{ ai_keywords_active }}</div>
-      <div class="text-[10px] text-gray-500">AI キーワード</div>
-    </div>
-    <div>
-      <div class="text-lg font-bold text-amber-600">{{ auto_added_count }}</div>
-      <div class="text-[10px] text-gray-500">自動登録済み</div>
-    </div>
-    <div>
-      <div class="text-lg font-bold text-green-600">{{ ai_deals }}</div>
-      <div class="text-[10px] text-gray-500">AI発見 Deal</div>
-    </div>
-    <div>
-      {% if last_discovery_log %}
-      <div class="text-xs font-semibold text-gray-700">{{ last_discovery_log.started_at.strftime('%m/%d %H:%M') }}</div>
-      <div class="text-[10px] text-gray-500">最終実行</div>
-      {% else %}
-      <div class="text-xs font-semibold text-gray-400">-</div>
-      <div class="text-[10px] text-gray-500">最終実行</div>
-      {% endif %}
-    </div>
-  </div>
-  <div id="discovery-msg" class="text-xs mt-2"></div>
-</div>
-{% endif %}
-
-
-<!-- Pending Candidates -->
-{% if discovery_available and pending_candidates %}
-<div class="bg-white rounded-lg shadow-sm border mb-4">
-  <div class="px-4 py-3 border-b flex items-center justify-between">
-    <h2 class="text-sm font-semibold text-gray-900">承認待ちキーワード候補 ({{ pending_candidates|length }}件)</h2>
-    <button onclick="cleanupCandidates()" class="text-xs text-red-600 hover:underline">古い候補を一括削除</button>
-  </div>
-  <div class="divide-y max-h-80 overflow-y-auto" id="candidates-list">
-    {% for c in pending_candidates %}
-    <div class="px-4 py-2 flex items-center justify-between hover:bg-gray-50" id="candidate-{{ c.id }}">
-      <div class="min-w-0 flex-1 mr-3">
-        <div class="text-sm font-medium text-gray-900">{{ c.keyword }}</div>
-        <div class="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5">
-          <span class="px-1 py-0.5 rounded
-            {% if c.status == 'validated' %}bg-green-100 text-green-700{% else %}bg-gray-100 text-gray-600{% endif %}">
-            {{ c.status }}
-          </span>
-          <span>{{ c.strategy }}</span>
-          <span>信頼度 {{ "%.0f"|format(c.confidence * 100) }}%</span>
-          {% if c.reasoning %}<span class="truncate max-w-[200px]">{{ c.reasoning }}</span>{% endif %}
-        </div>
-      </div>
-      <div class="flex items-center gap-1 flex-shrink-0">
-        <button onclick="approveCandidate({{ c.id }})" class="px-2 py-1 text-xs bg-green-100 text-green-700 hover:bg-green-200 rounded">承認</button>
-        <button onclick="rejectCandidate({{ c.id }})" class="px-2 py-1 text-xs bg-red-100 text-red-600 hover:bg-red-200 rounded">却下</button>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-<!-- AI Seed Keywords (cold start) -->
-{% if keywords|length < 5 and anthropic_configured %}
-<div class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg shadow-sm border border-amber-200 p-4 mb-4">
-  <div class="flex items-center justify-between mb-2">
-    <div>
-      <span class="text-amber-700 font-bold text-sm">AIキーワード自動提案</span>
-      <p class="text-xs text-gray-500 mt-0.5">Claude AIが転売で利益の出やすいキーワードを40件提案します。選んで一括登録できます。</p>
-    </div>
-    <button onclick="generateSeedKeywords()" id="seed-btn"
-            class="px-3 py-1.5 bg-amber-600 text-white text-xs rounded-md hover:bg-amber-700 flex-shrink-0">
-      AIに提案してもらう
-    </button>
-  </div>
-  <div id="seed-msg" class="text-xs mt-1"></div>
-  <div id="seed-results" class="hidden mt-3">
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-xs text-gray-600"><span id="seed-count">0</span>件の候補</span>
-      <div class="flex gap-2">
-        <button onclick="toggleAllSeeds(true)" class="text-xs text-blue-600 hover:underline">全選択</button>
-        <button onclick="toggleAllSeeds(false)" class="text-xs text-gray-500 hover:underline">全解除</button>
-      </div>
-    </div>
-    <div id="seed-list" class="max-h-64 overflow-y-auto divide-y border rounded-md bg-white"></div>
-    <div class="mt-3 flex items-center justify-between">
-      <span class="text-xs text-gray-500" id="seed-selected-count">0件選択中</span>
-      <button onclick="applySeedKeywords()" id="seed-apply-btn"
-              class="px-4 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700">
-        選択したキーワードを登録
-      </button>
-    </div>
-  </div>
-</div>
-{% endif %}
-
 <!-- Add keyword form -->
 <div class="bg-white rounded-lg shadow-sm border p-4 mb-4">
   <form onsubmit="addKeyword(event)" class="flex gap-3 items-end">
@@ -164,7 +51,9 @@
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <span class="text-sm font-medium text-gray-900">{{ kw.keyword }}</span>
-          {% if kw.source == 'manual' %}
+          {% if kw.source == 'product_finder' %}
+          <span class="px-1.5 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded-full">PF</span>
+          {% elif kw.source == 'manual' %}
           <span class="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-500 rounded-full">手動</span>
           {% else %}
           <span class="px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded-full">AI</span>
@@ -607,111 +496,6 @@ async function scanAll() {
     window.location.reload();
   } catch (e) {
     btn.textContent = 'エラー';
-    btn.disabled = false;
-  }
-}
-
-async function triggerDiscovery() {
-  const btn = document.getElementById('trigger-discovery-btn');
-  const msgEl = document.getElementById('discovery-msg');
-  btn.disabled = true; btn.textContent = '実行中...';
-  msgEl.textContent = '';
-  try {
-    const resp = await fetch('/api/discovery/trigger', {method: 'POST'});
-    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
-    const data = await resp.json();
-    msgEl.textContent = `候補 ${data.candidates_generated}件生成、${data.keywords_added}件追加`;
-    msgEl.className = 'text-xs mt-2 text-green-600';
-    setTimeout(() => window.location.reload(), 2000);
-  } catch (e) {
-    msgEl.textContent = e.message;
-    msgEl.className = 'text-xs mt-2 text-red-600';
-    btn.textContent = '手動実行';
-    btn.disabled = false;
-  }
-}
-
-// --- Seed Keywords ---
-let seedData = [];
-
-async function generateSeedKeywords() {
-  const btn = document.getElementById('seed-btn');
-  const msgEl = document.getElementById('seed-msg');
-  btn.disabled = true; btn.textContent = 'AIが分析中...';
-  msgEl.textContent = '';
-  try {
-    const resp = await fetch('/api/discovery/seed', {method: 'POST'});
-    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
-    const data = await resp.json();
-    seedData = data.suggestions;
-    renderSeedList(seedData);
-    document.getElementById('seed-results').classList.remove('hidden');
-    document.getElementById('seed-count').textContent = seedData.length;
-    btn.textContent = '再生成';
-    btn.disabled = false;
-    if (data.filtered_out > 0) {
-      msgEl.textContent = `${data.filtered_out}件は既存キーワードと重複のため除外`;
-      msgEl.className = 'text-xs mt-1 text-gray-500';
-    }
-  } catch (e) {
-    msgEl.textContent = e.message;
-    msgEl.className = 'text-xs mt-1 text-red-600';
-    btn.textContent = 'AIに提案してもらう';
-    btn.disabled = false;
-  }
-}
-
-function renderSeedList(items) {
-  const list = document.getElementById('seed-list');
-  list.innerHTML = items.map((item, i) => `
-    <label class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
-      <input type="checkbox" checked class="seed-cb rounded" data-index="${i}">
-      <div class="flex-1 min-w-0">
-        <div class="text-sm font-medium text-gray-900">${item.keyword}</div>
-        <div class="text-xs text-gray-500 truncate">${item.category ? '<span class="text-purple-600">[' + item.category + ']</span> ' : ''}${item.reasoning}</div>
-      </div>
-      <span class="text-[10px] text-gray-400 flex-shrink-0">${Math.round(item.confidence * 100)}%</span>
-    </label>
-  `).join('');
-  list.addEventListener('change', updateSeedCount);
-  updateSeedCount();
-}
-
-function updateSeedCount() {
-  const checked = document.querySelectorAll('.seed-cb:checked').length;
-  document.getElementById('seed-selected-count').textContent = checked + '件選択中';
-}
-
-function toggleAllSeeds(checked) {
-  document.querySelectorAll('.seed-cb').forEach(cb => cb.checked = checked);
-  updateSeedCount();
-}
-
-async function applySeedKeywords() {
-  const btn = document.getElementById('seed-apply-btn');
-  const checked = document.querySelectorAll('.seed-cb:checked');
-  if (checked.length === 0) { alert('キーワードを選択してください'); return; }
-
-  const keywords = [];
-  checked.forEach(cb => {
-    const item = seedData[parseInt(cb.dataset.index)];
-    keywords.push(item);
-  });
-
-  btn.disabled = true; btn.textContent = '登録中...';
-  try {
-    const resp = await fetch('/api/discovery/seed/apply', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({keywords: keywords}),
-    });
-    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
-    const data = await resp.json();
-    btn.textContent = data.added + '件登録完了';
-    setTimeout(() => window.location.reload(), 1500);
-  } catch (e) {
-    alert(e.message);
-    btn.textContent = '選択したキーワードを登録';
     btn.disabled = false;
   }
 }
@@ -1345,42 +1129,6 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeListingModal();
 });
 
-// Candidate management
-async function approveCandidate(id) {
-  try {
-    const resp = await fetch(`/api/discovery/candidates/${id}/approve`, {method: 'POST'});
-    const el = document.getElementById(`candidate-${id}`);
-    if (!resp.ok) {
-      const d = await resp.json();
-      // Already processed by auto-cleanup — just remove the row
-      if (resp.status === 400 && el) {
-        el.style.opacity = '0.3';
-        el.innerHTML = '<div class="px-4 py-2 text-xs text-gray-400">処理済み（自動却下されていました）</div>';
-        return;
-      }
-      throw new Error(d.detail || 'Failed');
-    }
-    if (el) { el.style.opacity = '0.3'; el.innerHTML = '<div class="px-4 py-2 text-xs text-green-600">承認済み</div>'; }
-  } catch (e) { alert(e.message); }
-}
-
-async function rejectCandidate(id) {
-  try {
-    const resp = await fetch(`/api/discovery/candidates/${id}/reject`, {method: 'POST'});
-    const el = document.getElementById(`candidate-${id}`);
-    if (!resp.ok) {
-      const d = await resp.json();
-      if (resp.status === 400 && el) {
-        el.style.opacity = '0.3';
-        el.innerHTML = '<div class="px-4 py-2 text-xs text-gray-400">処理済み</div>';
-        return;
-      }
-      throw new Error(d.detail || 'Failed');
-    }
-    if (el) { el.style.opacity = '0.3'; el.innerHTML = '<div class="px-4 py-2 text-xs text-red-500">却下済み</div>'; }
-  } catch (e) { alert(e.message); }
-}
-
 async function relistFromKeywords(auctionId) {
   if (!confirm('この商品をAmazonに再出品しますか？')) return;
   const btn = document.getElementById('relist-btn-' + auctionId);
@@ -1401,14 +1149,5 @@ async function relistFromKeywords(auctionId) {
   }
 }
 
-async function cleanupCandidates() {
-  if (!confirm('7日以上前の候補とバーコード等の低品質候補を一括削除しますか？')) return;
-  try {
-    const resp = await fetch('/api/discovery/candidates/cleanup', {method: 'POST'});
-    const data = await resp.json();
-    alert(`${data.rejected}件を削除しました（残り${data.remaining_pending}件）`);
-    window.location.reload();
-  } catch (e) { alert(e.message); }
-}
 </script>
 {% endblock %}

@@ -249,28 +249,6 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
     for alert in recent_alerts:
         alert.is_listed = alert.yahoo_auction_id in monitored_auction_ids
     scanner = app_state.get("deal_scanner")
-    discovery = app_state.get("discovery_engine")
-
-    # AI Discovery stats
-    from ..models import KeywordCandidate, DiscoveryLog
-    ai_keywords_active = (
-        db.query(WatchedKeyword)
-        .filter(WatchedKeyword.source != "manual", WatchedKeyword.is_active == True)  # noqa: E712
-        .count()
-    )
-    auto_added_count = (
-        db.query(KeywordCandidate)
-        .filter(KeywordCandidate.status == "auto_added")
-        .count()
-    )
-    ai_deals = (
-        db.query(DealAlert)
-        .join(WatchedKeyword)
-        .filter(WatchedKeyword.source != "manual")
-        .count()
-    )
-    last_log = db.query(DiscoveryLog).order_by(DiscoveryLog.id.desc()).first()
-    from ..config import settings as app_settings
 
     # Monitored items for bottom section
     monitored_items = (
@@ -305,30 +283,14 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
         for sh in skip_rows:
             relist_skip_map[sh.item_id] = sh.new_status or ""
 
-    # Pending candidates for approval UI
-    pending_candidates = (
-        db.query(KeywordCandidate)
-        .filter(KeywordCandidate.status.in_(["pending", "validated"]))
-        .order_by(KeywordCandidate.confidence.desc())
-        .limit(20)
-        .all()
-    )
-
     return templates.TemplateResponse("keywords.html", {
         "request": request,
         "active_page": "keywords",
         "keywords": keywords,
         "recent_alerts": recent_alerts,
         "scanner_available": scanner is not None,
-        "discovery_available": discovery is not None,
-        "ai_keywords_active": ai_keywords_active,
-        "auto_added_count": auto_added_count,
-        "ai_deals": ai_deals,
-        "last_discovery_log": last_log,
-        "anthropic_configured": bool(app_settings.anthropic_api_key),
         "monitored_items": monitored_items,
         "relist_skip_map": relist_skip_map,
-        "pending_candidates": pending_candidates,
     })
 
 
