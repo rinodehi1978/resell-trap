@@ -114,7 +114,7 @@ class WatchedKeyword(Base):
 
     # AI Discovery fields
     source: Mapped[str] = mapped_column(Text, default="manual")
-    # "manual" | "ai_brand" | "ai_title" | "ai_category" | "ai_synonym" | "ai_llm"
+    # "manual" | "product_finder" | "ai_brand" | "ai_title" | "ai_category" | "ai_synonym" | "ai_llm"
     parent_keyword_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("watched_keywords.id"), nullable=True
     )

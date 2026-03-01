@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import defaultdict
+from time import monotonic
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +21,7 @@ from ..matcher import (
     is_apparel,
     match_products,
 )
+from ..ai.generator import _is_barcode
 from ..models import DealAlert, WatchedKeyword
 from ..notifier.webhook import LINE_NOTIFY_URL, send_webhook
 
@@ -44,31 +47,393 @@ class DealScanner:
         self._webhook_type = webhook_type
         self._deep_validation_count = 0
         self._sp_api = sp_api_client
+        self._pf_cache: tuple[float, list[dict]] | None = None
+
+    # ── Helper methods for Product Finder pipeline ──────────────────────
+
+    @staticmethod
+    def _normalize_model(model: str) -> str:
+        """Normalize model number for comparison: lowercase + remove hyphens."""
+        return re.sub(r"[-\u30fc]", "", model.lower())
+
+    def _extract_yahoo_keywords(self, keepa_product: dict) -> list[str]:
+        """Extract Yahoo search keywords from a Keepa product.
+
+        Priority:
+        1. product["model"] field (if not a barcode)
+        2. Model numbers from title (fallback)
+
+        Rules:
+        - No model number → empty list (exclude)
+        - Model ≤4 chars → exclude
+        - Model ≥5 chars → use as keyword
+        - Max 3 keywords per product
+        """
+        models: list[str] = []
+
+        # Try model field first
+        model_field = (keepa_product.get("model") or "").strip()
+        if model_field and not _is_barcode(model_field) and len(model_field) >= 5:
+            models.append(model_field)
+
+        # Fallback: extract from title
+        if not models:
+            title = keepa_product.get("title") or ""
+            title_models = extract_model_numbers_from_text(title)
+            models = [m for m in title_models if len(m) >= 5]
+
+        # Deduplicate by normalized form
+        seen: set[str] = set()
+        unique: list[str] = []
+        for m in models:
+            norm = self._normalize_model(m)
+            if norm not in seen:
+                seen.add(norm)
+                unique.append(m)
+
+        return unique[:3]
+
+    async def _match_yahoo_to_amazon(self, yr, keepa_product: dict):
+        """Match a Yahoo item to an Amazon/Keepa product using model number matching.
+
+        Simple exact-match after hyphen removal:
+        - Extract models from both Yahoo title and Keepa product
+        - Normalize (lowercase + remove hyphens)
+        - Exact match only (SV18 vs SV18FF = different products)
+        - Exclude apparel, junk, accessories
+
+        Returns a scored DealCandidate or None.
+        """
+        yahoo_title = yr.title if hasattr(yr, "title") else yr.get("title", "")
+        buy_now = yr.buy_now_price if hasattr(yr, "buy_now_price") else yr.get("buy_now_price", 0)
+
+        if buy_now <= 0:
+            return None
+
+        # Exclude apparel and junk
+        if is_apparel(yahoo_title):
+            return None
+        if "ジャンク" in yahoo_title:
+            return None
+
+        # Accessory check
+        if extract_accessory_signals_from_text(yahoo_title):
+            return None
+
+        # Extract Amazon model numbers (normalized, 5+ chars)
+        amazon_models: set[str] = set()
+        model_field = (keepa_product.get("model") or "").strip()
+        if model_field and not _is_barcode(model_field) and len(model_field) >= 5:
+            amazon_models.add(self._normalize_model(model_field))
+        amazon_title = keepa_product.get("title") or ""
+        for m in extract_model_numbers_from_text(amazon_title):
+            if len(m) >= 5:
+                amazon_models.add(self._normalize_model(m))
+
+        if not amazon_models:
+            return None
+
+        # Extract Yahoo model numbers (normalized, 5+ chars)
+        yahoo_models: set[str] = set()
+        for m in extract_model_numbers_from_text(yahoo_title):
+            if len(m) >= 5:
+                yahoo_models.add(self._normalize_model(m))
+
+        # Exact match (after normalization)
+        if not amazon_models & yahoo_models:
+            return None
+
+        # Score the deal
+        yr_shipping = yr.shipping_cost if hasattr(yr, "shipping_cost") else yr.get("shipping_cost")
+
+        # Dynamic referral fee lookup via SP-API
+        fee_pct = settings.deal_amazon_fee_pct
+        if self._sp_api is not None:
+            _asin = keepa_product.get("asin", "")
+            _stats = keepa_product.get("stats") or {}
+            _current = _stats.get("current") or []
+            _used_price = _current[2] if len(_current) > 2 and _current[2] not in (None, -1) else 0
+            if _asin and _used_price > 0:
+                actual_pct = await self._sp_api.get_referral_fee_pct(_asin, _used_price)
+                if actual_pct is not None:
+                    fee_pct = actual_pct
+
+        deal = score_deal(
+            yahoo_price=buy_now,
+            keepa_product=keepa_product,
+            yahoo_shipping=yr_shipping,
+            forwarding_cost=settings.deal_forwarding_cost,
+            amazon_fee_pct=fee_pct,
+            good_rank_threshold=settings.keepa_good_rank_threshold,
+        )
+
+        if not deal:
+            return None
+
+        # Price ratio sanity check
+        if deal.sell_price > 0 and buy_now < deal.sell_price * 0.25:
+            return None
+
+        # Populate Yahoo fields
+        deal.yahoo_title = yahoo_title
+        deal.yahoo_price = buy_now
+        if yr_shipping is not None:
+            deal.yahoo_shipping = yr_shipping
+        deal.yahoo_auction_id = yr.auction_id if hasattr(yr, "auction_id") else yr.get("auction_id", "")
+        deal.yahoo_url = yr.url if hasattr(yr, "url") else yr.get("url", "")
+        deal.yahoo_image_url = yr.image_url if hasattr(yr, "image_url") else yr.get("image_url", "")
+
+        return deal
+
+    # ── Product Finder pipeline (Phase 1) ─────────────────────────────
+
+    async def _get_pf_products(self) -> list[dict]:
+        """Fetch products from Keepa Product Finder with caching."""
+        now = monotonic()
+
+        # Return cached if still valid
+        if self._pf_cache is not None:
+            cached_at, products = self._pf_cache
+            if now - cached_at < settings.pf_cache_ttl:
+                logger.info("Product Finder: using cache (%d products)", len(products))
+                return products
+
+        # Check token budget
+        tokens = self._keepa.tokens_left
+        if tokens is not None and tokens <= 100:
+            logger.warning("Keepa tokens low (%s), skipping Product Finder", tokens)
+            return []
+
+        try:
+            products = await self._keepa.product_finder(
+                selection={
+                    "salesRankDrops90_gte": settings.demand_finder_min_drops90,
+                    "current_USED_gte": settings.demand_finder_min_used_price,
+                    "perPage": settings.demand_finder_max_results,
+                },
+                stats=settings.keepa_default_stats_days,
+            )
+        except Exception as e:
+            logger.warning("Product Finder failed: %s", e)
+            return []
+
+        if not products:
+            return []
+
+        # Filter: exclude products where used >= new (overpriced used)
+        filtered = []
+        for p in products:
+            stats = p.get("stats") or {}
+            current = stats.get("current") or []
+            used = current[2] if len(current) > 2 and current[2] not in (None, -1) else 0
+            new = current[1] if len(current) > 1 and current[1] not in (None, -1) else 0
+            if new > 0 and used >= new:
+                continue
+            filtered.append(p)
+
+        self._pf_cache = (now, filtered)
+        logger.info("Product Finder: %d products (%d after filter)", len(products), len(filtered))
+        return filtered
+
+    async def _scan_pf_deals(self, products: list[dict], db) -> int:
+        """Phase 1: Scan Product Finder products against Yahoo Auctions."""
+        yahoo_searches = 0
+        total_deals = 0
+
+        for product in products:
+            keywords = self._extract_yahoo_keywords(product)
+            if not keywords:
+                continue
+
+            for keyword in keywords:
+                if yahoo_searches >= settings.pf_max_yahoo_searches:
+                    logger.info("PF scan: Yahoo search limit reached (%d)", yahoo_searches)
+                    return total_deals
+
+                # Search Yahoo
+                yahoo_results = []
+                for page in range(1, settings.deal_scan_max_pages + 1):
+                    try:
+                        page_results = await self._scraper.search(keyword, page=page)
+                    except Exception as e:
+                        logger.warning("Yahoo search failed for PF keyword '%s': %s", keyword, e)
+                        break
+                    if not page_results:
+                        break
+                    yahoo_results.extend(page_results)
+                yahoo_searches += 1
+
+                if not yahoo_results:
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # Match each Yahoo result against this Amazon product
+                deals = []
+                for yr in yahoo_results:
+                    deal = await self._match_yahoo_to_amazon(yr, product)
+                    if deal and (
+                        deal.gross_margin_pct >= settings.deal_min_gross_margin_pct
+                        and deal.gross_margin_pct <= settings.deal_max_gross_margin_pct
+                        and deal.gross_profit >= settings.deal_min_gross_profit
+                    ):
+                        deals.append(deal)
+
+                if not deals:
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # Find or create WatchedKeyword for this search term
+                kw = (
+                    db.query(WatchedKeyword)
+                    .filter(WatchedKeyword.keyword == keyword)
+                    .first()
+                )
+                if not kw:
+                    kw = WatchedKeyword(
+                        keyword=keyword,
+                        source="product_finder",
+                        is_active=True,
+                    )
+                    db.add(kw)
+                    db.flush()
+
+                # Process deals (best first)
+                deals.sort(key=lambda d: d.gross_profit, reverse=True)
+                for deal in deals:
+                    result = await self._process_deal(deal, kw, db)
+                    if result:
+                        total_deals += 1
+
+                await asyncio.sleep(0.3)
+
+        return total_deals
+
+    async def _process_deal(self, deal, kw: WatchedKeyword, db) -> dict | None:
+        """Process a matched deal: dedup check, save alert, notify, series expansion.
+
+        Shared by both Phase 1 (Product Finder) and Phase 2 (manual keywords).
+        Returns a deal summary dict or None if skipped.
+        """
+        # Check if already notified (exact auction+ASIN match)
+        existing = (
+            db.query(DealAlert)
+            .filter(
+                DealAlert.yahoo_auction_id == deal.yahoo_auction_id,
+                DealAlert.amazon_asin == deal.amazon_asin,
+            )
+            .first()
+        )
+        if existing:
+            return None
+
+        # ASIN dedup: skip if same ASIN notified recently (different auction)
+        dedup_cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.deal_dedup_hours)
+        recent_same_asin = (
+            db.query(DealAlert)
+            .filter(
+                DealAlert.amazon_asin == deal.amazon_asin,
+                DealAlert.status.in_(["active", "listed"]),
+                DealAlert.notified_at >= dedup_cutoff,
+            )
+            .first()
+        )
+        if recent_same_asin:
+            # Allow if this deal is significantly better (profit improved by ¥1000+)
+            if deal.gross_profit <= recent_same_asin.gross_profit + 1000:
+                logger.debug(
+                    "ASIN dedup: skipping %s (ASIN %s, recent alert %d hrs ago)",
+                    deal.yahoo_auction_id, deal.amazon_asin, settings.deal_dedup_hours,
+                )
+                return None
+
+        # Record alert BEFORE webhook (crash-safe: prevents duplicate notifications)
+        alert = DealAlert(
+            keyword_id=kw.id,
+            yahoo_auction_id=deal.yahoo_auction_id,
+            amazon_asin=deal.amazon_asin,
+            yahoo_title=deal.yahoo_title,
+            yahoo_url=deal.yahoo_url,
+            yahoo_image_url=deal.yahoo_image_url or "",
+            amazon_title=deal.amazon_title or "",
+            yahoo_price=deal.yahoo_price,
+            yahoo_shipping=deal.yahoo_shipping,
+            sell_price=deal.sell_price,
+            gross_profit=deal.gross_profit,
+            gross_margin_pct=deal.gross_margin_pct,
+            amazon_fee_pct=round(deal.amazon_fee / deal.sell_price * 100, 1) if deal.sell_price else 10.0,
+            forwarding_cost=deal.forwarding_cost,
+        )
+        try:
+            nested = db.begin_nested()
+            db.add(alert)
+            db.flush()
+        except IntegrityError:
+            nested.rollback()
+            logger.debug("Duplicate alert skipped: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
+            return None
+
+        # Update keyword stats for learning loop
+        kw.total_deals_found += 1
+        kw.total_gross_profit += deal.gross_profit
+
+        # Send notification (after DB save to prevent duplicates on crash)
+        await self._send_webhook(deal, kw)
+
+        # 型番シリーズ横展開: 利益Deal発見時に兄弟モデル候補を自動生成
+        if deal.gross_profit >= settings.series_expansion_min_profit:
+            await self._enqueue_series_candidates(deal, kw, db)
+
+        return {
+            "yahoo_title": deal.yahoo_title,
+            "yahoo_price": deal.yahoo_price,
+            "sell_price": deal.sell_price,
+            "gross_profit": deal.gross_profit,
+            "gross_margin_pct": deal.gross_margin_pct,
+        }
+
+    # ── Main scan loop ────────────────────────────────────────────────
 
     async def scan_all(self) -> None:
-        """Scan all active watched keywords and notify on new deals.
+        """Scan for deals in two phases:
 
-        Keywords are scanned in rotation order: least-recently-scanned first
-        (never-scanned keywords get top priority). Scanning stops early when
-        Keepa tokens are exhausted, so the next cycle picks up where this one
-        left off.
+        Phase 1: Product Finder pipeline (Amazon-first, main source)
+          - Keepa Product Finder → extract model numbers → Yahoo search → match → notify
+        Phase 2: Manual keyword scan (source="manual" only, legacy)
+          - Existing Yahoo→Keepa flow for user-added keywords
         """
         self._deep_validation_count = 0
         self._keepa.clear_search_cache()
         db = SessionLocal()
         try:
+            # Phase 1: Product Finder pipeline (Amazon-first)
+            pf_deals = 0
+            if settings.keepa_enabled:
+                try:
+                    products = await self._get_pf_products()
+                    if products:
+                        pf_deals = await self._scan_pf_deals(products, db)
+                        db.commit()
+                        logger.info(
+                            "Phase 1 (Product Finder): %d new deals from %d products",
+                            pf_deals, len(products),
+                        )
+                except Exception as e:
+                    logger.exception("Phase 1 (Product Finder) error: %s", e)
+                    db.rollback()
+
+            # Phase 2: Manual keywords only
             keywords = (
                 db.query(WatchedKeyword)
-                .filter(WatchedKeyword.is_active == True)  # noqa: E712
+                .filter(
+                    WatchedKeyword.is_active == True,  # noqa: E712
+                    WatchedKeyword.source == "manual",
+                )
                 .order_by(
-                    # NULL (never scanned) first, then oldest scan first
                     WatchedKeyword.last_scanned_at.is_(None).desc(),
                     WatchedKeyword.last_scanned_at.asc(),
                 )
                 .all()
             )
-            if not keywords:
-                return
 
             scanned = 0
             for kw in keywords:
@@ -76,14 +441,13 @@ class DealScanner:
                 tokens = self._keepa.tokens_left
                 if tokens is not None and tokens <= 5:
                     logger.info(
-                        "Keepa tokens low (%s remaining), pausing scan after %d/%d keywords. "
-                        "Remaining keywords will be prioritized next cycle.",
+                        "Keepa tokens low (%s), pausing Phase 2 after %d/%d keywords.",
                         tokens, scanned, len(keywords),
                     )
                     break
 
-                # Skip dormant keywords to save Keepa tokens
-                dormant_threshold = 5 if kw.source != "manual" else 20
+                # Skip dormant keywords
+                dormant_threshold = 20  # manual keywords only
                 if kw.scans_since_last_deal >= dormant_threshold and kw.total_scans >= dormant_threshold:
                     kw.last_scanned_at = datetime.now(timezone.utc)
                     kw.total_scans += 1
@@ -100,7 +464,7 @@ class DealScanner:
                     else:
                         kw.scans_since_last_deal += 1
                     scanned += 1
-                    await asyncio.sleep(0.5)  # breathe between keywords for health checks
+                    await asyncio.sleep(0.5)
                 except Exception as e:
                     logger.warning("Error scanning keyword '%s': %s", kw.keyword, e)
 
@@ -110,7 +474,10 @@ class DealScanner:
             # Free ORM identity map to reduce memory
             db.expire_all()
 
-            logger.info("Scan cycle complete: %d/%d keywords scanned", scanned, len(keywords))
+            logger.info(
+                "Scan cycle complete: PF=%d deals, Manual=%d/%d keywords scanned",
+                pf_deals, scanned, len(keywords),
+            )
             db.commit()
         except Exception as e:
             logger.exception("Error in deal scan loop: %s", e)
@@ -181,89 +548,16 @@ class DealScanner:
             db.close()
 
     async def _scan_keyword(self, kw: WatchedKeyword, db) -> list[dict]:
-        """Search Yahoo + Keepa, score deals, notify on new ones."""
+        """Phase 2: Search Yahoo + Keepa, score deals, notify on new ones."""
         deals = await self._find_deals(kw.keyword)
         if not deals:
             return []
 
         new_deals = []
         for deal in deals:
-            # Check if already notified (exact auction+ASIN match)
-            existing = (
-                db.query(DealAlert)
-                .filter(
-                    DealAlert.yahoo_auction_id == deal.yahoo_auction_id,
-                    DealAlert.amazon_asin == deal.amazon_asin,
-                )
-                .first()
-            )
-            if existing:
-                continue
-
-            # ASIN dedup: skip if same ASIN notified recently (different auction)
-            dedup_cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.deal_dedup_hours)
-            recent_same_asin = (
-                db.query(DealAlert)
-                .filter(
-                    DealAlert.amazon_asin == deal.amazon_asin,
-                    DealAlert.status.in_(["active", "listed"]),
-                    DealAlert.notified_at >= dedup_cutoff,
-                )
-                .first()
-            )
-            if recent_same_asin:
-                # Allow if this deal is significantly better (profit improved by ¥1000+)
-                if deal.gross_profit <= recent_same_asin.gross_profit + 1000:
-                    logger.debug(
-                        "ASIN dedup: skipping %s (ASIN %s, recent alert %d hrs ago)",
-                        deal.yahoo_auction_id, deal.amazon_asin, settings.deal_dedup_hours,
-                    )
-                    continue
-
-            # Record alert BEFORE webhook (crash-safe: prevents duplicate notifications)
-            alert = DealAlert(
-                keyword_id=kw.id,
-                yahoo_auction_id=deal.yahoo_auction_id,
-                amazon_asin=deal.amazon_asin,
-                yahoo_title=deal.yahoo_title,
-                yahoo_url=deal.yahoo_url,
-                yahoo_image_url=deal.yahoo_image_url or "",
-                amazon_title=deal.amazon_title or "",
-                yahoo_price=deal.yahoo_price,
-                yahoo_shipping=deal.yahoo_shipping,
-                sell_price=deal.sell_price,
-                gross_profit=deal.gross_profit,
-                gross_margin_pct=deal.gross_margin_pct,
-                amazon_fee_pct=round(deal.amazon_fee / deal.sell_price * 100, 1) if deal.sell_price else 10.0,
-                forwarding_cost=deal.forwarding_cost,
-            )
-            try:
-                nested = db.begin_nested()
-                db.add(alert)
-                db.flush()
-            except IntegrityError:
-                nested.rollback()
-                logger.debug("Duplicate alert skipped: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
-                continue
-
-            # Update keyword stats for learning loop
-            kw.total_deals_found += 1
-            kw.total_gross_profit += deal.gross_profit
-
-            # Send notification (after DB save to prevent duplicates on crash)
-            await self._send_webhook(deal, kw)
-
-            # 型番シリーズ横展開: 利益Deal発見時に兄弟モデル候補を自動生成
-            if deal.gross_profit >= settings.series_expansion_min_profit:
-                await self._enqueue_series_candidates(deal, kw, db)
-
-            new_deals.append({
-                "yahoo_title": deal.yahoo_title,
-                "yahoo_price": deal.yahoo_price,
-                "sell_price": deal.sell_price,
-                "gross_profit": deal.gross_profit,
-                "gross_margin_pct": deal.gross_margin_pct,
-            })
+            result = await self._process_deal(deal, kw, db)
+            if result:
+                new_deals.append(result)
 
         logger.info(
             "Keyword '%s': found %d deals, %d new",

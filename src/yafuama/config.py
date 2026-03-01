@@ -99,9 +99,13 @@ class Settings(BaseSettings):
 
     # Demand Discovery（需要ベースキーワード発見）
     demand_finder_enabled: bool = True
-    demand_finder_min_drops90: int = 1        # 過去3ヶ月の最低販売回数
+    demand_finder_min_drops90: int = 5        # 過去3ヶ月の最低販売回数
     demand_finder_min_used_price: int = 10000 # 中古最低価格（円）
     demand_finder_max_results: int = 50       # Product Finder最大取得件数
+
+    # Product Finder Deal Scanner（Amazon起点スキャン）
+    pf_cache_ttl: int = 1800                 # Product Finder結果キャッシュTTL（秒、30分）
+    pf_max_yahoo_searches: int = 30          # 1サイクルあたりのYahoo検索上限
 
     # Suggest Cross-Match（Amazon/Yahooサジェストクロスマッチ）
     suggest_crossmatch_enabled: bool = True
