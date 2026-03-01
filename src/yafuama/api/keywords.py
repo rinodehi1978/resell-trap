@@ -159,7 +159,7 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
         from ..ai.rejection_analyzer import analyze_single_rejection
         analyze_single_rejection(alert, reason, db)
     except Exception:
-        pass  # Non-critical: don't fail the rejection itself
+        logger.debug("analyze_single_rejection failed (non-critical)", exc_info=True)
 
     for attempt in range(3):
         try:
@@ -183,7 +183,7 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
         from ..matcher_overrides import overrides
         overrides.reload()
     except Exception:
-        pass
+        logger.debug("overrides.reload() failed (non-critical)", exc_info=True)
 
     return {"ok": True, "id": alert_id, "reason": reason}
 

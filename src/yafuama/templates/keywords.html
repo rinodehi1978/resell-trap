@@ -543,12 +543,17 @@ async function addKeyword(e) {
 }
 
 async function toggleKeyword(id, active) {
-  await fetch('/api/keywords/' + id, {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({is_active: active}),
-  });
-  window.location.reload();
+  try {
+    const resp = await fetch('/api/keywords/' + id, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({is_active: active}),
+    });
+    if (!resp.ok) throw new Error('更新に失敗しました');
+    window.location.reload();
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 async function deleteKeyword(id, triggerBtn) {
@@ -563,17 +568,17 @@ async function deleteKeyword(id, triggerBtn) {
   }
 }
 
-async function scanKeyword(id) {
-  const btn = event.target;
-  btn.disabled = true; btn.textContent = 'スキャン中...';
+async function scanKeyword(id, btn) {
+  if (!btn) btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'スキャン中...'; }
   try {
     const resp = await fetch('/api/keywords/' + id + '/scan', {method: 'POST'});
+    if (!resp.ok) throw new Error('スキャンに失敗しました');
     const data = await resp.json();
-    btn.textContent = data.new_deals + '件の新規Deal';
+    if (btn) btn.textContent = data.new_deals + '件の新規Deal';
     setTimeout(() => window.location.reload(), 1500);
   } catch (e) {
-    btn.textContent = 'エラー';
-    btn.disabled = false;
+    if (btn) { btn.textContent = 'エラー'; btn.disabled = false; }
   }
 }
 
@@ -581,7 +586,8 @@ async function scanAll() {
   const btn = document.getElementById('scan-all-btn');
   btn.disabled = true; btn.textContent = 'スキャン中...';
   try {
-    await fetch('/api/keywords/scan', {method: 'POST'});
+    const resp = await fetch('/api/keywords/scan', {method: 'POST'});
+    if (!resp.ok) throw new Error('スキャンに失敗しました');
     window.location.reload();
   } catch (e) {
     btn.textContent = 'エラー';

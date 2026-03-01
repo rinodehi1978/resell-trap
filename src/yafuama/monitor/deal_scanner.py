@@ -13,6 +13,7 @@ from ..config import settings
 from ..database import SessionLocal
 from ..keepa.analyzer import score_deal
 from ..matcher import (
+    extract_accessory_signals_from_text,
     extract_model_numbers_from_text,
     extract_product_info,
     is_apparel,
