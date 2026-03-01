@@ -341,6 +341,14 @@
         <textarea id="relist-condition-note" rows="3"
                   class="w-full px-2 py-1.5 text-sm border rounded-md"
                   placeholder="コンディション説明...">{{ item.amazon_condition_note or '' }}</textarea>
+        <!-- Image selection for relist -->
+        <label class="block text-xs text-gray-500">画像選択</label>
+        <div id="relist-images-container">
+          <div id="relist-images-loading" class="text-xs text-gray-400 py-2 text-center">画像を読み込み中...</div>
+          <div id="relist-images-grid" class="grid grid-cols-3 gap-1.5 hidden"></div>
+          <div id="relist-images-empty" class="text-xs text-gray-400 py-2 text-center hidden">画像が見つかりません</div>
+        </div>
+        <div class="text-[10px] text-gray-400">最大6枚選択（1枚目がメイン画像）</div>
         <button onclick="relistAmazon()" id="relist-btn"
                 class="w-full px-3 py-2 text-sm bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-md text-center">
           Amazonに再出品
@@ -455,11 +463,78 @@ async function onRelistConditionChange() {
   }
 })();
 
+// --- Relist Image Gallery ---
+async function _loadRelistImages() {
+  const loading = document.getElementById('relist-images-loading');
+  const grid = document.getElementById('relist-images-grid');
+  const empty = document.getElementById('relist-images-empty');
+  if (!loading) return; // not in relist mode
+
+  try {
+    const resp = await fetch('/api/items/' + auctionId + '/images');
+    if (!resp.ok) throw new Error('Failed');
+    const data = await resp.json();
+    const images = data.images || [];
+
+    loading.classList.add('hidden');
+    if (images.length === 0) {
+      empty.classList.remove('hidden');
+      return;
+    }
+
+    images.forEach((url, i) => {
+      const label = document.createElement('label');
+      label.className = 'relative cursor-pointer group';
+      const escaped = url.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      label.innerHTML =
+        '<input type="checkbox" ' + (i === 0 ? 'checked' : '') + ' data-url="' + escaped + '"' +
+        ' class="absolute top-1 left-1 z-10 rounded text-blue-600" onchange="_enforceRelistMax()">' +
+        '<img src="' + escaped + '" alt="Image ' + (i+1) + '"' +
+        ' class="w-full aspect-square object-cover rounded border-2 ' + (i === 0 ? 'border-blue-500' : 'border-gray-200') + ' group-hover:border-blue-400 bg-gray-100"' +
+        ' onerror="this.parentElement.style.display=\'none\'">' +
+        (i === 0 ? '<span class="absolute bottom-0 left-0 right-0 text-center text-[9px] bg-blue-600 text-white rounded-b">メイン</span>' : '');
+      grid.appendChild(label);
+    });
+    grid.classList.remove('hidden');
+  } catch (e) {
+    loading.classList.add('hidden');
+    empty.textContent = '画像の読み込みに失敗しました';
+    empty.classList.remove('hidden');
+  }
+}
+
+function _enforceRelistMax() {
+  const checkboxes = document.querySelectorAll('#relist-images-grid input[type="checkbox"]');
+  const checked = document.querySelectorAll('#relist-images-grid input[type="checkbox"]:checked');
+  if (checked.length >= 6) {
+    checkboxes.forEach(cb => { if (!cb.checked) cb.disabled = true; });
+  } else {
+    checkboxes.forEach(cb => { cb.disabled = false; });
+  }
+  checkboxes.forEach(cb => {
+    const img = cb.parentElement.querySelector('img');
+    if (img) {
+      img.classList.toggle('border-blue-500', cb.checked);
+      img.classList.toggle('border-gray-200', !cb.checked);
+    }
+  });
+}
+
+function _getSelectedRelistImages() {
+  const checked = document.querySelectorAll('#relist-images-grid input[type="checkbox"]:checked');
+  return Array.from(checked).map(cb => cb.dataset.url);
+}
+
+// Auto-load images on page load (only when relist UI is visible)
+_loadRelistImages();
+
 async function relistAmazon() {
   const condition = document.getElementById('relist-condition').value;
   const conditionNote = document.getElementById('relist-condition-note').value.trim();
+  const imageUrls = _getSelectedRelistImages();
   const labels = {used_like_new:'ほぼ新品', used_very_good:'非常に良い', used_good:'良い', used_acceptable:'可'};
-  if (!confirm('コンディション「' + labels[condition] + '」でAmazonに再出品しますか？')) return;
+  const imgMsg = imageUrls.length > 0 ? '（画像' + imageUrls.length + '枚）' : '（画像なし）';
+  if (!confirm('コンディション「' + labels[condition] + '」' + imgMsg + 'でAmazonに再出品しますか？')) return;
 
   const btn = document.getElementById('relist-btn');
   const msgEl = document.getElementById('delete-item-msg');
@@ -467,6 +542,7 @@ async function relistAmazon() {
   try {
     const body = {condition: condition};
     if (conditionNote) body.condition_note = conditionNote;
+    if (imageUrls.length > 0) body.image_urls = imageUrls;
     const resp = await fetch('/api/amazon/listings/' + auctionId + '/relist', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
