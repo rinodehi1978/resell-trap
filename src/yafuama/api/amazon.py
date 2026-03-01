@@ -315,6 +315,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
         logger.error("Failed to create Amazon listing for %s: %s", body.auction_id, e)
         raise HTTPException(502, f"SP-API error: {e}") from e
 
+    import json as _json
+
     item.amazon_asin = body.asin
     item.amazon_sku = sku
     item.amazon_condition = condition
@@ -326,6 +328,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     item.amazon_lead_time_days = lead_time
     item.amazon_shipping_pattern = body.shipping_pattern
     item.amazon_condition_note = body.condition_note
+    if body.image_urls:
+        item.amazon_image_urls = _json.dumps(body.image_urls)
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""  # チェックリストリセット
@@ -564,7 +568,14 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
         await asyncio.sleep(3)
 
         # Offer images: PATCH after listing creation
+        # Use body images, or fall back to previously saved images
+        import json as _json
         image_urls = body.get("image_urls", [])
+        if not image_urls and item.amazon_image_urls:
+            try:
+                image_urls = _json.loads(item.amazon_image_urls)
+            except (ValueError, TypeError):
+                image_urls = []
         if image_urls:
             # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
             from ..amazon.image_proxy import upload_images_to_s3
@@ -620,6 +631,9 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     item.amazon_lead_time_days = lead_time
     if condition_note:
         item.amazon_condition_note = condition_note
+    # Save new image URLs if provided in body
+    if body.get("image_urls"):
+        item.amazon_image_urls = _json.dumps(body["image_urls"])
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""

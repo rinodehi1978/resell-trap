@@ -55,6 +55,7 @@ class MonitoredItem(Base):
     amazon_lead_time_days: Mapped[int] = mapped_column(Integer, default=4)  # lead_time_to_ship_max_days
     amazon_shipping_pattern: Mapped[str] = mapped_column(Text, default="2_3_days")
     amazon_condition_note: Mapped[str] = mapped_column(Text, default="")  # ユーザー編集済みコンディション説明
+    amazon_image_urls: Mapped[str] = mapped_column(Text, default="")  # JSON: 出品時に選択した画像URL一覧
     amazon_last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     seller_central_checklist: Mapped[str] = mapped_column(Text, default="")  # JSON: {"lead_time":false,"images":false,"condition":false}
 
