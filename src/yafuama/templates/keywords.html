@@ -147,8 +147,11 @@
 
 <!-- Keywords list -->
 <div class="bg-white rounded-lg shadow-sm border mb-4">
-  <div class="px-4 py-3 border-b">
+  <div class="px-4 py-3 border-b flex items-center justify-between">
     <h2 class="text-sm font-semibold text-gray-900">登録キーワード ({{ keywords|length }}件)</h2>
+    {% if keywords %}
+    <button onclick="bulkDeleteKeywords()" class="text-xs text-red-600 hover:underline">全キーワード削除</button>
+    {% endif %}
   </div>
   {% if not keywords %}
   <div class="p-8 text-center text-sm text-gray-500">
@@ -553,6 +556,19 @@ async function toggleKeyword(id, active) {
     window.location.reload();
   } catch (e) {
     alert(e.message);
+  }
+}
+
+async function bulkDeleteKeywords() {
+  if (!confirm('全キーワードを削除しますか？（DealAlert通知履歴も削除されます）')) return;
+  try {
+    const resp = await fetch('/api/keywords', {method: 'DELETE'});
+    if (!resp.ok) throw new Error('Failed');
+    const data = await resp.json();
+    alert(data.deleted + '件のキーワードを削除しました');
+    location.reload();
+  } catch (e) {
+    alert('一括削除に失敗しました: ' + e.message);
   }
 }
 

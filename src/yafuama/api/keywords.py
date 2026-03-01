@@ -508,6 +508,23 @@ def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
+@router.delete("", status_code=200)
+def bulk_delete_keywords(
+    source: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Bulk delete keywords. Pass ?source=ai to delete only non-manual, or omit to delete ALL."""
+    query = db.query(WatchedKeyword)
+    if source == "ai":
+        query = query.filter(WatchedKeyword.source.notin_(["manual"]))
+    keywords = query.all()
+    count = len(keywords)
+    for kw in keywords:
+        db.delete(kw)  # triggers cascade delete of DealAlerts
+    db.commit()
+    return {"deleted": count}
+
+
 @router.get("/{keyword_id}/alerts", response_model=DealAlertListResponse)
 def list_alerts(keyword_id: int, db: Session = Depends(get_db)):
     kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
