@@ -19,7 +19,7 @@ if settings.database_url.startswith("sqlite"):
     def _set_sqlite_pragma(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 

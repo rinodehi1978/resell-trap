@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -160,12 +161,22 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
     except Exception:
         pass  # Non-critical: don't fail the rejection itself
 
-    try:
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        logger.warning("DB locked during reject: %s", e)
-        raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
+    for attempt in range(3):
+        try:
+            db.commit()
+            break
+        except OperationalError:
+            db.rollback()
+            if attempt < 2:
+                time.sleep(1)
+                # Re-apply changes after rollback
+                alert.status = "rejected"
+                alert.rejection_reason = reason
+                alert.rejection_note = body.get("note", "")
+                alert.rejected_at = datetime.now(timezone.utc)
+            else:
+                logger.warning("DB locked during reject after 3 attempts")
+                raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
     # Reload matcher overrides with new patterns
     try:
@@ -184,12 +195,22 @@ def delete_alert(alert_id: int, db: Session = Depends(get_db)):
     if not alert:
         raise HTTPException(404, "Alert not found")
     db.delete(alert)
-    try:
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        logger.warning("DB locked during delete: %s", e)
-        raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
+    for attempt in range(3):
+        try:
+            db.commit()
+            return
+        except OperationalError:
+            db.rollback()
+            if attempt < 2:
+                time.sleep(1)
+                # Re-attach alert for deletion after rollback
+                alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+                if not alert:
+                    return  # Already deleted by another process
+                db.delete(alert)
+            else:
+                logger.warning("DB locked during delete after 3 attempts")
+                raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
 
 @router.post("/alerts/{alert_id}/list", status_code=201)
