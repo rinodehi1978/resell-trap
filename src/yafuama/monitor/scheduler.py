@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import SessionLocal
 from ..models import (
-    DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem,
+    AmazonOrder, DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem,
     NotificationLog, StatusHistory,
 )
 from ..notifier.base import BaseNotifier
@@ -30,8 +30,6 @@ class MonitorScheduler:
         self.notifiers = notifiers
         self._scheduler = AsyncIOScheduler()
         self.running = False
-        # Track items already notified for ending soon (one-shot per item)
-        self._notified_ending_soon: set[int] = set()
 
     def start(self) -> None:
         self._scheduler.add_job(
@@ -39,14 +37,6 @@ class MonitorScheduler:
             "interval",
             seconds=60,  # 60秒tickで十分（実際のスクレイピング間隔はcheck_interval_seconds=300）
             id="monitor_loop",
-            replace_existing=True,
-            max_instances=1,
-        )
-        self._scheduler.add_job(
-            self._expire_ended_alerts,
-            "interval",
-            seconds=1800,  # 30分ごと
-            id="alert_cleanup",
             replace_existing=True,
             max_instances=1,
         )
@@ -147,7 +137,11 @@ class MonitorScheduler:
         logger.info("Monitor scheduler shut down")
 
     async def _check_all(self) -> None:
-        """Main loop: check all active items that are due."""
+        """Main loop: check all active items that are due.
+
+        Commits per-item to prevent Amazon-side changes from being
+        rolled back if a later item fails.
+        """
         db: Session = SessionLocal()
         try:
             items = (
@@ -170,28 +164,17 @@ class MonitorScheduler:
                         continue
                 try:
                     await self._check_item(item, db)
+                    # Per-item commit: ensures Amazon-side changes (delist etc.)
+                    # are persisted even if a later item fails
+                    db.commit()
                 except Exception as e:
                     logger.warning(
                         "Failed to check item %s (%s): %s",
                         item.auction_id, item.title[:30], e,
                     )
+                    db.rollback()
 
-                # Ending-soon alert: notify 30 min before end if Amazon listed
-                if (
-                    item.id not in self._notified_ending_soon
-                    and item.amazon_sku
-                    and item.end_time
-                ):
-                    end_dt = item.end_time if item.end_time.tzinfo else item.end_time.replace(tzinfo=timezone.utc)
-                    remaining = (end_dt - now).total_seconds()
-                    if 0 < remaining <= 1800:  # 30 minutes
-                        self._notified_ending_soon.add(item.id)
-                        try:
-                            await self._notify_ending_soon(item, int(remaining))
-                        except Exception as e:
-                            logger.warning("Ending-soon alert failed for %s: %s", item.auction_id, e)
-
-            # Auto-cleanup ended items (3 days after ending)
+            # Auto-cleanup ended items (7 days after ending)
             self._cleanup_ended_items(db, now)
 
             # Expire old DealAlerts (7+ days since notification)
@@ -256,14 +239,14 @@ class MonitorScheduler:
             if item.ended_at is None:
                 item.ended_at = datetime.now(timezone.utc)
             logger.info("Item %s ended (%s), stopping monitor", item.auction_id, data.status)
-            # Expire corresponding DealAlerts
+            # Expire corresponding DealAlerts (both active and listed)
             expired_count = (
                 db.query(DealAlert)
                 .filter(
                     DealAlert.yahoo_auction_id == item.auction_id,
-                    DealAlert.status == "active",
+                    DealAlert.status.in_(["active", "listed"]),
                 )
-                .update({"status": "expired"})
+                .update({"status": "expired"}, synchronize_session="fetch")
             )
             if expired_count:
                 logger.info("Expired %d DealAlert(s) for ended auction %s", expired_count, item.auction_id)
@@ -426,110 +409,13 @@ class MonitorScheduler:
         expired_count = (
             db.query(DealAlert)
             .filter(
-                DealAlert.status == "active",
+                DealAlert.status.in_(["active", "listed"]),
                 DealAlert.notified_at < cutoff,
             )
-            .update({"status": "expired"})
+            .update({"status": "expired"}, synchronize_session="fetch")
         )
         if expired_count:
             logger.info("Expired %d old DealAlert(s) (7+ days)", expired_count)
-
-    async def _expire_ended_alerts(self) -> None:
-        """Check active/listed DealAlerts: expire ended auctions, sync prices."""
-        db: Session = SessionLocal()
-        try:
-            live_alerts = (
-                db.query(DealAlert)
-                .filter(DealAlert.status.in_(["active", "listed"]))
-                .all()
-            )
-            if not live_alerts:
-                return
-
-            # Group by auction_id to avoid duplicate fetches
-            alerts_by_auction: dict[str, list[DealAlert]] = {}
-            for alert in live_alerts:
-                alerts_by_auction.setdefault(alert.yahoo_auction_id, []).append(alert)
-
-            logger.info(
-                "Alert sync: checking %d auctions for %d alerts",
-                len(alerts_by_auction), len(live_alerts),
-            )
-
-            expired_count = 0
-            synced_count = 0
-            for auction_id, alerts in alerts_by_auction.items():
-                try:
-                    data = await self.scraper.fetch_auction(auction_id)
-                    if not data:
-                        continue
-                    if data.status != "active":
-                        for alert in alerts:
-                            if alert.status == "active":
-                                alert.status = "expired"
-                                expired_count += 1
-                    else:
-                        # Sync prices: use win_price (即決) if available, else current_price
-                        live_price = data.win_price if data.win_price and data.win_price > 0 else data.current_price
-                        if live_price and live_price > 0:
-                            for alert in alerts:
-                                if alert.yahoo_price != live_price:
-                                    self._sync_deal_alert_prices(auction_id, live_price, db)
-                                    synced_count += 1
-                                    break  # _sync handles all alerts for this auction
-                except Exception as e:
-                    logger.warning("Alert sync: failed to check %s: %s", auction_id, e)
-
-            if expired_count:
-                logger.info("Alert sync: expired %d alert(s)", expired_count)
-            if synced_count:
-                logger.info("Alert sync: price-synced %d auction(s)", synced_count)
-            db.commit()
-        except Exception as e:
-            logger.exception("Error in alert cleanup: %s", e)
-            db.rollback()
-        finally:
-            db.close()
-
-    # ------------------------------------------------------------------
-    # Ending-soon alert（終了間近アラート）
-    # ------------------------------------------------------------------
-
-    async def _notify_ending_soon(self, item: MonitoredItem, remaining_seconds: int) -> None:
-        """Send Discord notification when Amazon-listed auction is ending soon."""
-        from ..notifier.webhook import send_webhook
-
-        webhook_url = settings.webhook_url
-        if not webhook_url:
-            return
-
-        mins = remaining_seconds // 60
-        time_str = f"{mins}分" if mins > 0 else f"{remaining_seconds}秒"
-
-        yahoo_url = f"https://auctions.yahoo.co.jp/jp/auction/{item.auction_id}"
-        fields = [
-            {"name": "現在価格", "value": f"¥{item.current_price:,}", "inline": True},
-            {"name": "Amazon売価", "value": f"¥{item.amazon_price:,}" if item.amazon_price else "-", "inline": True},
-            {"name": "残り時間", "value": time_str, "inline": True},
-        ]
-        if item.bid_count:
-            fields.append({"name": "入札数", "value": str(item.bid_count), "inline": True})
-
-        payload = {
-            "embeds": [{
-                "title": f"\u23f0 まもなく終了: {(item.title or '')[:80]}",
-                "url": yahoo_url,
-                "color": 0xFF9800,  # orange
-                "fields": fields,
-                "footer": {"text": f"ヤフアマ Monitor | SKU: {item.amazon_sku}"},
-            }],
-        }
-
-        try:
-            await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
-            logger.info("Ending-soon alert sent for %s (%s remaining)", item.auction_id, time_str)
-        except Exception as e:
-            logger.warning("Ending-soon webhook failed for %s: %s", item.auction_id, e)
 
     # ------------------------------------------------------------------
     # Auto-relist detection（自動再出品検知）
@@ -539,9 +425,9 @@ class MonitorScheduler:
         """Check ended_no_winner items for Yahoo auto-relist (自動再出品).
 
         If a previously ended auction becomes active again:
-        1. Recalculate profitability with current Yahoo price
-        2. If still profitable → auto-create Amazon listing
-        3. Resume monitoring
+        1. Update MonitoredItem status back to active
+        2. Resume monitoring
+        3. Send Discord notification (user can re-list from UI)
         """
         import asyncio
 
@@ -569,8 +455,7 @@ class MonitorScheduler:
                 len(candidates), settings.relist_check_max_days,
             )
 
-            relisted = 0
-            skipped_profit = 0
+            detected = 0
             for item in candidates:
                 try:
                     data = await self.scraper.fetch_auction(item.auction_id)
@@ -608,15 +493,22 @@ class MonitorScheduler:
                         new_status="active",
                     ))
 
-                    # Profitability check & auto-list
-                    listed = await self._auto_relist_amazon(item, db)
-                    if listed:
-                        relisted += 1
-                    else:
-                        skipped_profit += 1
+                    # Profitability info for notification
+                    sell_price = item.amazon_price or 0
+                    yahoo_price = item.estimated_win_price or item.buy_now_price or item.win_price or 0
+                    shipping = item.shipping_cost or 0
+                    forwarding = item.forwarding_cost or settings.deal_forwarding_cost
+                    fee_pct = item.amazon_fee_pct or settings.deal_amazon_fee_pct
+                    amazon_fee = int(sell_price * fee_pct / 100) if sell_price else 0
+                    total_cost = yahoo_price + shipping + forwarding + settings.deal_system_fee + amazon_fee
+                    gross_profit = sell_price - total_cost if sell_price else 0
+                    margin_pct = (gross_profit / sell_price * 100) if sell_price > 0 else 0.0
 
-                    # Commit per item to prevent orphaned Amazon listings on crash
                     db.commit()
+                    detected += 1
+
+                    # Discord notification: inform user to re-list from UI
+                    await self._notify_relist_detected(item, gross_profit, margin_pct)
 
                     await asyncio.sleep(0.3)
                 except Exception as e:
@@ -625,10 +517,8 @@ class MonitorScheduler:
                     )
                     db.rollback()
 
-            if relisted:
-                logger.info("Relist check: %d item(s) relisted on Amazon", relisted)
-            if skipped_profit:
-                logger.info("Relist check: %d item(s) skipped (profit below threshold)", skipped_profit)
+            if detected:
+                logger.info("Relist check: %d item(s) detected as re-listed", detected)
 
         except Exception as e:
             logger.exception("Error in relist check: %s", e)
@@ -636,226 +526,47 @@ class MonitorScheduler:
         finally:
             db.close()
 
-    async def _auto_relist_amazon(self, item: MonitoredItem, db: Session) -> bool:
-        """Recalculate profitability and auto-create Amazon listing.
-
-        Returns True if listing was created, False if skipped.
-        """
-        import asyncio
-
-        from ..amazon import AmazonApiError
-        from ..amazon.pricing import generate_sku
-        from ..amazon.shipping import get_pattern_by_key
-        from ..main import app_state
-
-        sp_client = app_state.get("sp_api")
-        if not sp_client:
-            logger.warning("Auto-relist: SP-API not available")
-            return False
-
-        # Prices
-        sell_price = item.amazon_price or 0
-        yahoo_price = item.estimated_win_price or item.buy_now_price or item.win_price or 0
-        if sell_price <= 0 or yahoo_price <= 0:
-            logger.info("Auto-relist: no price data for %s, skipping", item.auction_id)
-            return False
-
-        # Profit calculation
-        shipping = item.shipping_cost or 0
-        forwarding = item.forwarding_cost or settings.deal_forwarding_cost
-        fee_pct = item.amazon_fee_pct or settings.deal_amazon_fee_pct
-        amazon_fee = int(sell_price * fee_pct / 100)
-        total_cost = yahoo_price + shipping + forwarding + settings.deal_system_fee + amazon_fee
-        gross_profit = sell_price - total_cost
-        margin_pct = (gross_profit / sell_price * 100) if sell_price > 0 else 0.0
-
-        logger.info(
-            "Auto-relist profit check %s: sell=¥%d yahoo=¥%d profit=¥%d margin=%.1f%%",
-            item.auction_id, sell_price, yahoo_price, gross_profit, margin_pct,
-        )
-
-        if margin_pct < settings.relist_min_margin_pct:
-            logger.info(
-                "Auto-relist: %s margin %.1f%% < %.1f%%, skipping",
-                item.auction_id, margin_pct, settings.relist_min_margin_pct,
-            )
-            db.add(StatusHistory(
-                item_id=item.id, auction_id=item.auction_id,
-                change_type="auto_relist_skip",
-                new_status=f"margin {margin_pct:.1f}% < {settings.relist_min_margin_pct}%",
-            ))
-            return False
-
-        if gross_profit < settings.relist_min_profit:
-            logger.info(
-                "Auto-relist: %s profit ¥%d < ¥%d, skipping",
-                item.auction_id, gross_profit, settings.relist_min_profit,
-            )
-            db.add(StatusHistory(
-                item_id=item.id, auction_id=item.auction_id,
-                change_type="auto_relist_skip",
-                new_status=f"profit ¥{gross_profit} < ¥{settings.relist_min_profit}",
-            ))
-            return False
-
-        # --- Profitable → create Amazon listing ---
-        condition = item.amazon_condition or "used_very_good"
-        suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
-        sku = f"{generate_sku(item.auction_id)}-R{suffix}"
-
-        pattern = get_pattern_by_key(item.amazon_shipping_pattern or "2_3_days")
-        if not pattern:
-            pattern = get_pattern_by_key("2_3_days")
-        lead_time = pattern.lead_time_days
-
-        attributes = {
-            "condition_type": [{"value": condition}],
-            "purchasable_offer": [{
-                "marketplace_id": settings.sp_api_marketplace,
-                "currency": "JPY",
-                "our_price": [{"schedule": [{"value_with_tax": sell_price}]}],
-            }],
-            "fulfillment_availability": [
-                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
-            ],
-            "merchant_suggested_asin": [{
-                "value": item.amazon_asin,
-                "marketplace_id": settings.sp_api_marketplace,
-            }],
-            "merchant_shipping_group": [{"value": settings.shipping_template_id}],
-            "lead_time_to_ship_max_days": [{"value": lead_time}],
-        }
-        if item.amazon_condition_note:
-            attributes["condition_note"] = [
-                {"value": item.amazon_condition_note, "language_tag": "ja_JP"}
-            ]
-
-        try:
-            product_type = await sp_client.get_product_type(item.amazon_asin)
-
-            try:
-                await sp_client.create_listing(
-                    settings.sp_api_seller_id, sku, product_type, attributes,
-                    offer_only=True,
-                )
-            except AmazonApiError as e:
-                if "INVALID" in str(e):
-                    attributes.pop("lead_time_to_ship_max_days", None)
-                    await sp_client.create_listing(
-                        settings.sp_api_seller_id, sku, product_type, attributes,
-                        offer_only=True,
-                    )
-                else:
-                    raise
-
-            await asyncio.sleep(3)
-
-            # Activation PATCHes
-            try:
-                await sp_client.patch_listing_price(
-                    settings.sp_api_seller_id, sku, sell_price,
-                )
-            except AmazonApiError as e:
-                logger.warning("Auto-relist: price PATCH failed for %s: %s", sku, e)
-            try:
-                await sp_client.patch_listing_quantity(
-                    settings.sp_api_seller_id, sku, 1,
-                )
-            except AmazonApiError as e:
-                logger.warning("Auto-relist: quantity PATCH failed for %s: %s", sku, e)
-            # Try lead_time PATCH (often rejected by SP-API, user sets manually)
-            try:
-                await sp_client.patch_listing_lead_time(
-                    settings.sp_api_seller_id, sku, lead_time,
-                )
-            except AmazonApiError:
-                logger.info("Auto-relist: lead_time PATCH failed for %s (manual setup needed)", sku)
-
-            # Update item
-            item.amazon_sku = sku
-            item.amazon_listing_status = "active"
-            item.amazon_last_synced_at = datetime.now(timezone.utc)
-            item.amazon_margin_pct = round(margin_pct, 1)
-            item.seller_central_checklist = ""  # チェックリストリセット
-
-            db.add(StatusHistory(
-                item_id=item.id, auction_id=item.auction_id,
-                change_type="amazon_listing",
-                new_status=f"auto_relist:{sku} ¥{sell_price} margin {margin_pct:.1f}%",
-            ))
-
-            logger.info(
-                "Auto-relist SUCCESS: %s SKU=%s ¥%d margin=%.1f%% (relist #%d)",
-                item.auction_id, sku, sell_price, margin_pct, item.relist_count,
-            )
-
-            # Discord通知: リードタイム手動設定のリマインダー
-            await self._notify_auto_relist(item, sku, sell_price, gross_profit, margin_pct, lead_time)
-
-            return True
-
-        except AmazonApiError as e:
-            logger.error("Auto-relist SP-API error for %s: %s", item.auction_id, e)
-            db.add(StatusHistory(
-                item_id=item.id, auction_id=item.auction_id,
-                change_type="auto_relist_error",
-                new_status=str(e)[:200],
-            ))
-            return False
-
-    async def _notify_auto_relist(
+    async def _notify_relist_detected(
         self,
         item: MonitoredItem,
-        sku: str,
-        sell_price: int,
         gross_profit: int,
         margin_pct: float,
-        lead_time: int,
     ) -> None:
-        """Send Discord notification for auto-relist with lead_time reminder."""
+        """Send Discord notification when a Yahoo re-list is detected.
+
+        User can re-list on Amazon from the UI (detail page or keywords page).
+        """
         from ..notifier.webhook import send_webhook
 
         webhook_url = settings.webhook_url
         if not webhook_url:
             return
 
-        sc_url = (
-            f"https://sellercentral.amazon.co.jp/inventory"
-            f"?tbla_myitable=sort:%7B%22sortOrder%22%3A%22DESCENDING%22%7D;search:{sku}"
-        )
+        yahoo_url = f"https://auctions.yahoo.co.jp/jp/auction/{item.auction_id}"
+        detail_url = f"https://yafuama.fly.dev/items/{item.auction_id}"
+
+        profit_str = f"¥{gross_profit:,} ({margin_pct:.1f}%)" if item.amazon_price else "価格未設定"
+        color = 0x00CC66 if margin_pct >= settings.relist_min_margin_pct else 0xFF9800
 
         payload = {
-            "content": "@here 自動再出品完了！リードタイムを確認してください",
-            "embeds": [
-                {
-                    "title": "自動再出品: " + (item.title or "")[:80],
-                    "url": item.url,
-                    "color": 0x00CC66,
-                    "fields": [
-                        {"name": "SKU", "value": sku, "inline": True},
-                        {"name": "販売価格", "value": f"¥{sell_price:,}", "inline": True},
-                        {"name": "利益", "value": f"¥{gross_profit:,} ({margin_pct:.1f}%)", "inline": True},
-                        {"name": "再出品回数", "value": str(item.relist_count), "inline": True},
-                        {"name": "設定リードタイム", "value": f"{lead_time}日", "inline": True},
-                    ],
-                    "footer": {"text": "ヤフアマ Auto-Relist"},
-                },
-                {
-                    "title": ">>> セラーセントラルでリードタイムを確認 <<<",
-                    "url": sc_url,
-                    "color": 0xFF9800,
-                    "description": (
-                        "SP-APIではリードタイムが反映されないことがあります。\n"
-                        f"セラーセントラルで **{lead_time}日** に設定してください。"
-                    ),
-                },
-            ],
+            "embeds": [{
+                "title": f"再出品検知: {(item.title or '')[:80]}",
+                "url": detail_url,
+                "color": color,
+                "fields": [
+                    {"name": "Yahoo価格", "value": f"¥{item.current_price:,}", "inline": True},
+                    {"name": "Amazon売価", "value": f"¥{item.amazon_price:,}" if item.amazon_price else "-", "inline": True},
+                    {"name": "想定利益", "value": profit_str, "inline": True},
+                    {"name": "再出品回数", "value": str(item.relist_count), "inline": True},
+                ],
+                "footer": {"text": "ヤフアマ | 詳細ページから再出品できます"},
+            }],
         }
 
         try:
             await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
         except Exception as e:
-            logger.warning("Auto-relist webhook failed: %s", e)
+            logger.warning("Relist detection webhook failed: %s", e)
 
     async def _retry_failed_amazon_deletions(self) -> None:
         """Retry Amazon listing deletion for ended items where deletion failed.
@@ -863,6 +574,8 @@ class MonitorScheduler:
         Covers two cases:
         - listing_status='error': API call failed previously
         - ended item still has amazon_sku + listing_status='active': deletion never attempted
+
+        Processes at most 5 items per cycle to avoid API throttling.
         """
         from ..amazon import AmazonApiError
         from ..main import app_state
@@ -873,13 +586,14 @@ class MonitorScheduler:
 
         db: Session = SessionLocal()
         try:
-            # Find ended items that still have an Amazon listing
+            # Find ended items that still have an Amazon listing (limit 5)
             stuck_items = (
                 db.query(MonitoredItem)
                 .filter(
                     MonitoredItem.status.like("ended_%"),
                     MonitoredItem.amazon_sku.isnot(None),
                 )
+                .limit(5)
                 .all()
             )
             if not stuck_items:
@@ -944,10 +658,12 @@ class MonitorScheduler:
         - NotificationLog: 30 days
         - KeywordCandidate (resolved): 30 days
         - DiscoveryLog: 90 days
+        - AmazonOrder: 180 days
         """
         db: Session = SessionLocal()
         try:
             now = datetime.now(timezone.utc)
+            cutoff_180d = now - timedelta(days=180)
             cutoff_90d = now - timedelta(days=90)
             cutoff_30d = now - timedelta(days=30)
             total_deleted = 0
@@ -1006,6 +722,16 @@ class MonitorScheduler:
             )
             if count:
                 logger.info("Data retention: deleted %d old DiscoveryLog records", count)
+                total_deleted += count
+
+            # AmazonOrder: delete older than 180 days
+            count = (
+                db.query(AmazonOrder)
+                .filter(AmazonOrder.created_at < cutoff_180d)
+                .delete(synchronize_session=False)
+            )
+            if count:
+                logger.info("Data retention: deleted %d old AmazonOrder(s)", count)
                 total_deleted += count
 
             db.commit()

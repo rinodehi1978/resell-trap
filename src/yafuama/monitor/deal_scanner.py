@@ -205,7 +205,7 @@ class DealScanner:
                 db.query(DealAlert)
                 .filter(
                     DealAlert.amazon_asin == deal.amazon_asin,
-                    DealAlert.status == "active",
+                    DealAlert.status.in_(["active", "listed"]),
                     DealAlert.notified_at >= dedup_cutoff,
                 )
                 .first()
@@ -219,14 +219,7 @@ class DealScanner:
                     )
                     continue
 
-            # Update keyword stats for learning loop
-            kw.total_deals_found += 1
-            kw.total_gross_profit += deal.gross_profit
-
-            # Send notification
-            await self._send_webhook(deal, kw)
-
-            # Record alert (use savepoint to handle duplicate gracefully)
+            # Record alert BEFORE webhook (crash-safe: prevents duplicate notifications)
             alert = DealAlert(
                 keyword_id=kw.id,
                 yahoo_auction_id=deal.yahoo_auction_id,
@@ -251,6 +244,13 @@ class DealScanner:
                 nested.rollback()
                 logger.debug("Duplicate alert skipped: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
                 continue
+
+            # Update keyword stats for learning loop
+            kw.total_deals_found += 1
+            kw.total_gross_profit += deal.gross_profit
+
+            # Send notification (after DB save to prevent duplicates on crash)
+            await self._send_webhook(deal, kw)
 
             # 型番シリーズ横展開: 利益Deal発見時に兄弟モデル候補を自動生成
             if deal.gross_profit >= settings.series_expansion_min_profit:

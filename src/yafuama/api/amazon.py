@@ -189,6 +189,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
         raise HTTPException(400, f"Invalid shipping_pattern: {body.shipping_pattern}")
     lead_time = pattern.lead_time_days
 
+    _s3_image_urls = None  # Track S3-proxied URLs for DB persistence
+
     try:
         attributes = {
             "condition_type": [{"value": condition}],
@@ -269,6 +271,7 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
             from ..amazon.image_proxy import upload_images_to_s3
 
             proxied_urls = await upload_images_to_s3(body.image_urls, body.auction_id)
+            _s3_image_urls = proxied_urls
             try:
                 await client.patch_offer_images(
                     settings.sp_api_seller_id, sku, proxied_urls,
@@ -329,7 +332,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     item.amazon_shipping_pattern = body.shipping_pattern
     item.amazon_condition_note = body.condition_note
     if body.image_urls:
-        item.amazon_image_urls = _json.dumps(body.image_urls)
+        # Save S3-proxied URLs if available, otherwise original URLs
+        item.amazon_image_urls = _json.dumps(_s3_image_urls or body.image_urls)
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""  # チェックリストリセット
@@ -513,6 +517,8 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
         pattern = get_pattern_by_key("2_3_days")
     lead_time = pattern.lead_time_days
 
+    _s3_relist_urls = None  # Track S3-proxied URLs for DB persistence
+
     try:
         attributes = {
             "condition_type": [{"value": condition}],
@@ -581,6 +587,7 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
             from ..amazon.image_proxy import upload_images_to_s3
 
             image_urls = await upload_images_to_s3(image_urls, item.auction_id)
+            _s3_relist_urls = image_urls
             try:
                 await client.patch_offer_images(
                     settings.sp_api_seller_id, sku, image_urls,
@@ -631,8 +638,10 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     item.amazon_lead_time_days = lead_time
     if condition_note:
         item.amazon_condition_note = condition_note
-    # Save new image URLs if provided in body
-    if body.get("image_urls"):
+    # Save S3-proxied image URLs for future relist persistence
+    if _s3_relist_urls:
+        item.amazon_image_urls = _json.dumps(_s3_relist_urls)
+    elif body.get("image_urls"):
         item.amazon_image_urls = _json.dumps(body["image_urls"])
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
