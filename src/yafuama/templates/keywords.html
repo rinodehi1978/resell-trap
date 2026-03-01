@@ -1312,8 +1312,17 @@ document.addEventListener('keydown', e => {
 async function approveCandidate(id) {
   try {
     const resp = await fetch(`/api/discovery/candidates/${id}/approve`, {method: 'POST'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
     const el = document.getElementById(`candidate-${id}`);
+    if (!resp.ok) {
+      const d = await resp.json();
+      // Already processed by auto-cleanup — just remove the row
+      if (resp.status === 400 && el) {
+        el.style.opacity = '0.3';
+        el.innerHTML = '<div class="px-4 py-2 text-xs text-gray-400">処理済み（自動却下されていました）</div>';
+        return;
+      }
+      throw new Error(d.detail || 'Failed');
+    }
     if (el) { el.style.opacity = '0.3'; el.innerHTML = '<div class="px-4 py-2 text-xs text-green-600">承認済み</div>'; }
   } catch (e) { alert(e.message); }
 }
@@ -1321,8 +1330,16 @@ async function approveCandidate(id) {
 async function rejectCandidate(id) {
   try {
     const resp = await fetch(`/api/discovery/candidates/${id}/reject`, {method: 'POST'});
-    if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || 'Failed'); }
     const el = document.getElementById(`candidate-${id}`);
+    if (!resp.ok) {
+      const d = await resp.json();
+      if (resp.status === 400 && el) {
+        el.style.opacity = '0.3';
+        el.innerHTML = '<div class="px-4 py-2 text-xs text-gray-400">処理済み</div>';
+        return;
+      }
+      throw new Error(d.detail || 'Failed');
+    }
     if (el) { el.style.opacity = '0.3'; el.innerHTML = '<div class="px-4 py-2 text-xs text-red-500">却下済み</div>'; }
   } catch (e) { alert(e.message); }
 }
