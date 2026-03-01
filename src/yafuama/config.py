@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     deal_min_price_for_keepa_search: int = 2000    # 個別Keepa検索の最低即決価格（円）
     # 深層検証（利益率50%超の候補をヤフオク説明文で再検証）
     # NOTE: enabled/max_per_cycleは将来実装予定（現在はmargin_thresholdのみ使用）
+    deal_dedup_hours: int = 24             # 同一ASIN重複排除の時間窓（時間）
     deal_deep_validation_enabled: bool = True
     deal_deep_validation_max_per_cycle: int = 10
     deal_deep_validation_margin_threshold: float = 50.0

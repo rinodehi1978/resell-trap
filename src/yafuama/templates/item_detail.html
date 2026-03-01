@@ -332,11 +332,15 @@
       {% elif item.amazon_asin and item.amazon_listing_status == 'delisted' %}
       <div class="space-y-2">
         <label class="block text-xs text-gray-500">コンディション</label>
-        <select id="relist-condition" class="w-full px-2 py-1.5 text-sm border rounded-md">
+        <select id="relist-condition" class="w-full px-2 py-1.5 text-sm border rounded-md" onchange="onRelistConditionChange()">
           {% for val, label in [("used_like_new", "ほぼ新品"), ("used_very_good", "非常に良い"), ("used_good", "良い"), ("used_acceptable", "可")] %}
           <option value="{{ val }}" {% if item.amazon_condition == val %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
+        <label class="block text-xs text-gray-500">コンディションノート</label>
+        <textarea id="relist-condition-note" rows="3"
+                  class="w-full px-2 py-1.5 text-sm border rounded-md"
+                  placeholder="コンディション説明...">{{ item.amazon_condition_note or '' }}</textarea>
         <button onclick="relistAmazon()" id="relist-btn"
                 class="w-full px-3 py-2 text-sm bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-md text-center">
           Amazonに再出品
@@ -419,8 +423,41 @@ function checklistPanel() {
   };
 }
 
+let _relistTemplateCache = null;
+
+async function _loadRelistTemplates() {
+  if (_relistTemplateCache) return;
+  try {
+    const resp = await fetch('/api/templates');
+    if (resp.ok) _relistTemplateCache = await resp.json();
+    else _relistTemplateCache = {};
+  } catch (_) { _relistTemplateCache = {}; }
+}
+
+async function onRelistConditionChange() {
+  await _loadRelistTemplates();
+  const condition = document.getElementById('relist-condition').value;
+  const tpl = _relistTemplateCache[condition];
+  if (tpl && tpl.body) {
+    document.getElementById('relist-condition-note').value = tpl.body;
+  }
+}
+
+// Load template on page load for pre-selected condition
+(async () => {
+  const condSelect = document.getElementById('relist-condition');
+  if (condSelect && !document.getElementById('relist-condition-note').value.trim()) {
+    await _loadRelistTemplates();
+    const tpl = _relistTemplateCache?.[condSelect.value];
+    if (tpl && tpl.body) {
+      document.getElementById('relist-condition-note').value = tpl.body;
+    }
+  }
+})();
+
 async function relistAmazon() {
   const condition = document.getElementById('relist-condition').value;
+  const conditionNote = document.getElementById('relist-condition-note').value.trim();
   const labels = {used_like_new:'ほぼ新品', used_very_good:'非常に良い', used_good:'良い', used_acceptable:'可'};
   if (!confirm('コンディション「' + labels[condition] + '」でAmazonに再出品しますか？')) return;
 
@@ -428,10 +465,12 @@ async function relistAmazon() {
   const msgEl = document.getElementById('delete-item-msg');
   btn.disabled = true; btn.textContent = '再出品中...';
   try {
+    const body = {condition: condition};
+    if (conditionNote) body.condition_note = conditionNote;
     const resp = await fetch('/api/amazon/listings/' + auctionId + '/relist', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({condition: condition}),
+      body: JSON.stringify(body),
     });
     const d = await resp.json();
     if (!resp.ok) throw new Error(d.detail || '再出品に失敗しました');

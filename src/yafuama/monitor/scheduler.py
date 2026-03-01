@@ -30,6 +30,8 @@ class MonitorScheduler:
         self.notifiers = notifiers
         self._scheduler = AsyncIOScheduler()
         self.running = False
+        # Track items already notified for ending soon (one-shot per item)
+        self._notified_ending_soon: set[int] = set()
 
     def start(self) -> None:
         self._scheduler.add_job(
@@ -173,6 +175,21 @@ class MonitorScheduler:
                         "Failed to check item %s (%s): %s",
                         item.auction_id, item.title[:30], e,
                     )
+
+                # Ending-soon alert: notify 30 min before end if Amazon listed
+                if (
+                    item.id not in self._notified_ending_soon
+                    and item.amazon_sku
+                    and item.end_time
+                ):
+                    end_dt = item.end_time if item.end_time.tzinfo else item.end_time.replace(tzinfo=timezone.utc)
+                    remaining = (end_dt - now).total_seconds()
+                    if 0 < remaining <= 1800:  # 30 minutes
+                        self._notified_ending_soon.add(item.id)
+                        try:
+                            await self._notify_ending_soon(item, int(remaining))
+                        except Exception as e:
+                            logger.warning("Ending-soon alert failed for %s: %s", item.auction_id, e)
 
             # Auto-cleanup ended items (3 days after ending)
             self._cleanup_ended_items(db, now)
@@ -473,6 +490,46 @@ class MonitorScheduler:
             db.rollback()
         finally:
             db.close()
+
+    # ------------------------------------------------------------------
+    # Ending-soon alert（終了間近アラート）
+    # ------------------------------------------------------------------
+
+    async def _notify_ending_soon(self, item: MonitoredItem, remaining_seconds: int) -> None:
+        """Send Discord notification when Amazon-listed auction is ending soon."""
+        from ..notifier.webhook import send_webhook
+
+        webhook_url = settings.webhook_url
+        if not webhook_url:
+            return
+
+        mins = remaining_seconds // 60
+        time_str = f"{mins}分" if mins > 0 else f"{remaining_seconds}秒"
+
+        yahoo_url = f"https://auctions.yahoo.co.jp/jp/auction/{item.auction_id}"
+        fields = [
+            {"name": "現在価格", "value": f"¥{item.current_price:,}", "inline": True},
+            {"name": "Amazon売価", "value": f"¥{item.amazon_price:,}" if item.amazon_price else "-", "inline": True},
+            {"name": "残り時間", "value": time_str, "inline": True},
+        ]
+        if item.bid_count:
+            fields.append({"name": "入札数", "value": str(item.bid_count), "inline": True})
+
+        payload = {
+            "embeds": [{
+                "title": f"\u23f0 まもなく終了: {(item.title or '')[:80]}",
+                "url": yahoo_url,
+                "color": 0xFF9800,  # orange
+                "fields": fields,
+                "footer": {"text": f"ヤフアマ Monitor | SKU: {item.amazon_sku}"},
+            }],
+        }
+
+        try:
+            await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
+            logger.info("Ending-soon alert sent for %s (%s remaining)", item.auction_id, time_str)
+        except Exception as e:
+            logger.warning("Ending-soon webhook failed for %s: %s", item.auction_id, e)
 
     # ------------------------------------------------------------------
     # Auto-relist detection（自動再出品検知）

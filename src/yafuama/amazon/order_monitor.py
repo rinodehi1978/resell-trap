@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import MonitoredItem
+from ..models import AmazonOrder, MonitoredItem
 from ..notifier.webhook import send_webhook
 from . import AmazonApiError
 from .client import SpApiClient
@@ -49,8 +49,8 @@ class OrderMonitor:
         self._ensure_state_table()
         self._last_checked_at: str = self._load_checkpoint()
 
-        # Track seen order IDs to avoid duplicate notifications
-        self._seen_order_ids: set[str] = set()
+        # Track seen order IDs to avoid duplicate notifications (restored from DB)
+        self._seen_order_ids: set[str] = self._load_seen_order_ids()
 
     # ------------------------------------------------------------------
     # Checkpoint persistence (app_state table)
@@ -110,6 +110,27 @@ class OrderMonitor:
                 },
             )
             db.commit()
+        finally:
+            db.close()
+
+    @staticmethod
+    def _load_seen_order_ids() -> set[str]:
+        """Restore seen order IDs from DB (last 48 hours) to prevent duplicates on restart."""
+        db = SessionLocal()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+            rows = (
+                db.query(AmazonOrder.amazon_order_id)
+                .filter(AmazonOrder.created_at > cutoff)
+                .all()
+            )
+            seen = {r[0] for r in rows}
+            if seen:
+                logger.info("Order monitor: restored %d seen order IDs from DB", len(seen))
+            return seen
+        except Exception:
+            logger.warning("Order monitor: could not load seen order IDs (table may not exist yet)")
+            return set()
         finally:
             db.close()
 
@@ -234,6 +255,37 @@ class OrderMonitor:
             logger.info("Order notification sent for %s", order_id)
         else:
             logger.warning("Failed to send order notification for %s", order_id)
+
+        # Record order in DB for sales tracking & dedup on restart
+        try:
+            parsed_total = int(float(total_amount)) if total_amount != "?" else 0
+        except (ValueError, TypeError):
+            parsed_total = 0
+
+        try:
+            parsed_date = datetime.fromisoformat(purchase_date.replace("Z", "+00:00")) if purchase_date else None
+        except (ValueError, AttributeError):
+            parsed_date = None
+
+        order_record = AmazonOrder(
+            amazon_order_id=order_id,
+            item_id=product_info.get("item_id") if product_info else None,
+            auction_id=product_info.get("auction_id", "") if product_info else "",
+            sku=product_info.get("sku", "") if product_info else "",
+            asin=product_info.get("asin", "") if product_info else "",
+            title=product_info.get("title", "") if product_info else "",
+            order_total=parsed_total,
+            order_status=order_status,
+            purchase_date=parsed_date,
+            notification_success=success,
+        )
+        try:
+            db.add(order_record)
+            db.commit()
+        except Exception as e:
+            logger.warning("Order monitor: failed to save order %s to DB: %s", order_id, e)
+            db.rollback()
+
         return success
 
     def _build_discord_payload(
@@ -342,6 +394,8 @@ class OrderMonitor:
                         "yahoo_url": item.url,
                         "amazon_title": item_title,
                         "item_price": item_price,
+                        "item_id": item.id,
+                        "auction_id": item.auction_id,
                     }
 
             # Fallback: match by ASIN
@@ -355,6 +409,8 @@ class OrderMonitor:
                         "yahoo_url": item.url,
                         "amazon_title": item_title,
                         "item_price": item_price,
+                        "item_id": item.id,
+                        "auction_id": item.auction_id,
                     }
 
         return None

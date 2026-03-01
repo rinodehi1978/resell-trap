@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..matcher import is_apparel, match_products
-from ..models import DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem, NotificationLog, StatusHistory, WatchedKeyword
+from ..models import AmazonOrder, DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem, NotificationLog, StatusHistory, WatchedKeyword
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,22 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "logs": discovery_logs,
     }
 
+    # Sales summary (this month's Amazon orders)
+    from sqlalchemy import func
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_orders = (
+        db.query(
+            func.count(AmazonOrder.id),
+            func.coalesce(func.sum(AmazonOrder.order_total), 0),
+        )
+        .filter(AmazonOrder.created_at >= month_start)
+        .first()
+    )
+    order_stats = {
+        "count": month_orders[0] if month_orders else 0,
+        "revenue": month_orders[1] if month_orders else 0,
+    }
+
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "active_page": "dashboard",
@@ -115,6 +131,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "scanner_stats": scanner_stats,
         "recent_deals": recent_deals,
         "discovery_stats": discovery_stats,
+        "order_stats": order_stats,
     })
 
 

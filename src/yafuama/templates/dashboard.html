@@ -36,6 +36,23 @@
   </div>
 </div>
 
+<!-- Sales summary (this month) -->
+{% if order_stats.count > 0 %}
+<div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg shadow-sm border border-green-200 p-4 mb-6">
+  <h2 class="text-sm font-semibold text-green-900 mb-3">今月の売上</h2>
+  <div class="grid grid-cols-2 gap-4">
+    <div>
+      <div class="text-2xl font-bold text-green-700">{{ order_stats.count }}</div>
+      <div class="text-xs text-gray-500 mt-1">注文数</div>
+    </div>
+    <div>
+      <div class="text-2xl font-bold text-green-700">&yen;{{ "{:,}".format(order_stats.revenue) }}</div>
+      <div class="text-xs text-gray-500 mt-1">売上合計</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Deal Scanner status -->
 {% if scanner_stats.enabled %}
 <div class="bg-white rounded-lg shadow-sm border p-4 mb-6">

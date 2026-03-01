@@ -220,6 +220,24 @@ class ListingPreset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class AmazonOrder(Base):
+    __tablename__ = "amazon_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    amazon_order_id: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("monitored_items.id"), nullable=True)
+    auction_id: Mapped[str] = mapped_column(Text, default="")
+    sku: Mapped[str] = mapped_column(Text, default="")
+    asin: Mapped[str] = mapped_column(Text, default="")
+    title: Mapped[str] = mapped_column(Text, default="")
+    order_total: Mapped[int] = mapped_column(Integer, default=0)  # JPY
+    order_status: Mapped[str] = mapped_column(Text, default="")
+    purchase_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    notified_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    notification_success: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class RejectionPattern(Base):
     __tablename__ = "rejection_patterns"
     __table_args__ = (

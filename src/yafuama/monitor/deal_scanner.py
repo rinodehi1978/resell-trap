@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
 
@@ -187,7 +187,7 @@ class DealScanner:
 
         new_deals = []
         for deal in deals:
-            # Check if already notified
+            # Check if already notified (exact auction+ASIN match)
             existing = (
                 db.query(DealAlert)
                 .filter(
@@ -198,6 +198,26 @@ class DealScanner:
             )
             if existing:
                 continue
+
+            # ASIN dedup: skip if same ASIN notified recently (different auction)
+            dedup_cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.deal_dedup_hours)
+            recent_same_asin = (
+                db.query(DealAlert)
+                .filter(
+                    DealAlert.amazon_asin == deal.amazon_asin,
+                    DealAlert.status == "active",
+                    DealAlert.notified_at >= dedup_cutoff,
+                )
+                .first()
+            )
+            if recent_same_asin:
+                # Allow if this deal is significantly better (profit improved by ¥1000+)
+                if deal.gross_profit <= recent_same_asin.gross_profit + 1000:
+                    logger.debug(
+                        "ASIN dedup: skipping %s (ASIN %s, recent alert %d hrs ago)",
+                        deal.yahoo_auction_id, deal.amazon_asin, settings.deal_dedup_hours,
+                    )
+                    continue
 
             # Update keyword stats for learning loop
             kw.total_deals_found += 1
