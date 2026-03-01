@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -26,7 +27,7 @@ def keepa_minutes_to_datetime(minutes: int) -> datetime:
     return _KEEPA_EPOCH + timedelta(minutes=minutes)
 
 
-_SEARCH_CACHE_MAX = 50  # Max cached search results to prevent OOM
+_SEARCH_CACHE_MAX = 100  # Max cached search results
 
 
 class KeepaClient:
@@ -36,7 +37,8 @@ class KeepaClient:
         self._api_key = settings.keepa_api_key
         self._client = httpx.AsyncClient(timeout=30.0)
         self._tokens_left: int | None = None
-        self._search_cache: dict[str, list[dict[str, Any]]] = {}
+        # TTL-based cache: key -> (timestamp, results)
+        self._search_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     async def query_product(
         self,
@@ -89,9 +91,14 @@ class KeepaClient:
         """
         stat_days = stats or settings.keepa_default_stats_days
         cache_key = f"{term}:{stat_days}"
-        if cache_key in self._search_cache:
-            logger.debug("Keepa search cache hit: %s", term)
-            return self._search_cache[cache_key]
+        cached = self._search_cache.get(cache_key)
+        if cached is not None:
+            ts, products = cached
+            if monotonic() - ts < settings.keepa_cache_ttl:
+                logger.debug("Keepa search cache hit: %s", term)
+                return products
+            else:
+                del self._search_cache[cache_key]
 
         params = {
             "key": self._api_key,
@@ -127,8 +134,10 @@ class KeepaClient:
             )
 
         if len(self._search_cache) >= _SEARCH_CACHE_MAX:
-            self._search_cache.clear()
-        self._search_cache[cache_key] = products
+            # Evict oldest entry
+            oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
+            del self._search_cache[oldest_key]
+        self._search_cache[cache_key] = (monotonic(), products)
         return products
 
     async def product_finder(
@@ -184,8 +193,11 @@ class KeepaClient:
         return products
 
     def clear_search_cache(self) -> None:
-        """Clear the in-memory search result cache. Call at the start of each scan cycle."""
-        self._search_cache.clear()
+        """Evict expired entries from the cache (called at start of each scan cycle)."""
+        now = monotonic()
+        expired = [k for k, (ts, _) in self._search_cache.items() if now - ts >= settings.keepa_cache_ttl]
+        for k in expired:
+            del self._search_cache[k]
 
     @property
     def tokens_left(self) -> int | None:

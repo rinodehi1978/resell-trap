@@ -81,6 +81,15 @@ class DealScanner:
                     )
                     break
 
+                # Skip dormant keywords to save Keepa tokens
+                dormant_threshold = 5 if kw.source != "manual" else 20
+                if kw.scans_since_last_deal >= dormant_threshold and kw.total_scans >= dormant_threshold:
+                    kw.last_scanned_at = datetime.now(timezone.utc)
+                    kw.total_scans += 1
+                    kw.scans_since_last_deal += 1
+                    scanned += 1
+                    continue
+
                 try:
                     new_deals = await self._scan_keyword(kw, db)
                     kw.last_scanned_at = datetime.now(timezone.utc)

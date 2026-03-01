@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     keepa_api_key: str = ""
     keepa_default_stats_days: int = 90
     keepa_good_rank_threshold: int = 100_000
+    keepa_cache_ttl: int = 600  # Search cache TTL (seconds)
 
     # Deal Finder
     deal_forwarding_cost: int = 960       # サイズ不明時のフォールバック（100サイズ相当）

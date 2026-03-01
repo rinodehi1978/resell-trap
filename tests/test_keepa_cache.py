@@ -1,5 +1,6 @@
 """Tests for Keepa search result caching."""
 
+from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -65,20 +66,29 @@ class TestSearchCache:
         await keepa_client.search_products("same query", stats=90)
         assert keepa_client._client.get.call_count == 2
 
-    def test_clear_search_cache(self, keepa_client):
-        keepa_client._search_cache = {"key1": [{"asin": "B001"}], "key2": []}
+    def test_clear_search_cache_evicts_expired(self, keepa_client):
+        now = monotonic()
+        # Old entry (expired) and fresh entry
+        keepa_client._search_cache = {
+            "old": (now - 9999, [{"asin": "B001"}]),
+            "fresh": (now, [{"asin": "B002"}]),
+        }
         keepa_client.clear_search_cache()
-        assert len(keepa_client._search_cache) == 0
+        assert "old" not in keepa_client._search_cache
+        assert "fresh" in keepa_client._search_cache
 
     @pytest.mark.asyncio
-    async def test_cache_cleared_allows_fresh_fetch(self, keepa_client):
+    async def test_expired_cache_allows_fresh_fetch(self, keepa_client):
         products = [{"asin": "B001", "title": "A"}]
         keepa_client._client.get = AsyncMock(return_value=_mock_response(products))
 
         await keepa_client.search_products("query", stats=90)
         assert keepa_client._client.get.call_count == 1
 
-        keepa_client.clear_search_cache()
+        # Expire the cache entry
+        for key in keepa_client._search_cache:
+            ts, data = keepa_client._search_cache[key]
+            keepa_client._search_cache[key] = (ts - 9999, data)
 
         await keepa_client.search_products("query", stats=90)
         assert keepa_client._client.get.call_count == 2

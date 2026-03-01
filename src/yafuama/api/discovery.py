@@ -228,6 +228,23 @@ def discovery_log(db: Session = Depends(get_db)):
     return logs
 
 
+@router.post("/candidates/cleanup")
+def cleanup_candidates(db: Session = Depends(get_db)):
+    """Bulk-reject stale and low-quality pending candidates."""
+    from ..ai.engine import DiscoveryEngine
+
+    rejected = DiscoveryEngine._cleanup_stale_candidates(db)
+    db.commit()
+
+    remaining = (
+        db.query(KeywordCandidate)
+        .filter(KeywordCandidate.status == "pending")
+        .count()
+    )
+
+    return {"ok": True, "rejected": rejected, "remaining_pending": remaining}
+
+
 @router.post("/seed")
 async def seed_keywords(db: Session = Depends(get_db)):
     """Generate initial seed keywords via Claude API (cold-start helper).

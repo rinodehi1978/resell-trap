@@ -394,6 +394,43 @@ def generate_series_expansion(
     return candidates[:max_count]
 
 
+# Keepa brand → Yahoo-searchable short form
+_BRAND_SHORT_MAP: dict[str, str] = {
+    "ソニー・インタラクティブエンタテインメント": "SONY",
+    "sony interactive entertainment": "SONY",
+    "sony interactive entertainment inc.": "SONY",
+    "パナソニック株式会社": "Panasonic",
+    "panasonic corporation": "Panasonic",
+    "任天堂株式会社": "Nintendo",
+    "シャープ株式会社": "SHARP",
+    "日立グローバルライフソリューションズ": "日立",
+    "ダイソン・テクノロジー": "Dyson",
+    "dyson technology limited": "Dyson",
+}
+
+_BARCODE_RE = re.compile(r"^\d{8,}$")
+
+
+def _clean_brand(brand: str) -> str:
+    """Shorten/canonicalize Keepa brand names for Yahoo searchability."""
+    if not brand:
+        return ""
+    stripped = brand.strip()
+    lower = stripped.lower()
+    for long_form, short_form in _BRAND_SHORT_MAP.items():
+        if long_form.lower() in lower:
+            return short_form
+    if len(stripped) > 20:
+        first_word = stripped.split()[0] if stripped.split() else stripped
+        return first_word if len(first_word) >= 2 else ""
+    return stripped
+
+
+def _is_barcode(text: str) -> bool:
+    """Detect barcodes/EAN codes masquerading as model numbers."""
+    return bool(_BARCODE_RE.match(text.strip()))
+
+
 def generate_demand(
     demand_products: list[dict],
     existing: set[str],
@@ -407,9 +444,13 @@ def generate_demand(
     candidates = []
 
     for p in demand_products:
-        model = p.get("model") or ""
-        brand = p.get("brand") or ""
+        model = (p.get("model") or "").strip()
+        brand = (p.get("brand") or "").strip()
         title = p.get("title") or ""
+
+        # Filter: reject barcode/EAN in model field
+        if model and _is_barcode(model):
+            model = ""
 
         if not model or model == "None":
             # modelフィールドがない場合、タイトルから型番抽出を試みる
@@ -418,8 +459,19 @@ def generate_demand(
                 continue
             model = sorted(models)[0]
 
+        # Reject barcode extracted from title too
+        if _is_barcode(model):
+            continue
+
+        # Clean brand name for Yahoo searchability
+        brand = _clean_brand(brand)
+
         # ブランド + 型番でキーワード生成
         keyword = f"{brand} {model}".strip() if brand else model
+
+        # Skip keywords that are too short to be useful
+        if len(keyword) < 4:
+            continue
 
         if keyword.lower() in existing:
             continue

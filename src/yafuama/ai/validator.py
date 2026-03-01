@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from ..config import settings
@@ -11,6 +12,26 @@ from ..keepa.analyzer import score_deal
 from .generator import CandidateProposal
 
 logger = logging.getLogger(__name__)
+
+_BARCODE_IN_KEYWORD_RE = re.compile(r"\d{8,}")
+
+
+def pre_filter_candidate(candidate: CandidateProposal) -> str | None:
+    """Quick syntactic checks (no API calls). Returns rejection reason or None if OK."""
+    kw = candidate.keyword.strip()
+
+    if len(kw) < 3:
+        return f"Keyword too short ({len(kw)} chars)"
+
+    # Pure numeric string (barcode/EAN)
+    if kw.isdigit():
+        return "Pure numeric keyword (likely barcode)"
+
+    # Contains 8+ consecutive digits (embedded barcode)
+    if _BARCODE_IN_KEYWORD_RE.search(kw):
+        return "Contains barcode-like digit sequence"
+
+    return None
 
 
 @dataclass

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..config import settings
 from ..database import SessionLocal
@@ -15,7 +15,7 @@ from .analyzer import analyze_deal_history, compute_performance_score
 from .generator import generate_all, _get_existing_keywords
 from .llm import get_llm_suggestions
 from .suggest import generate_suggest_crossmatch
-from .validator import ValidationResult, validate_candidate
+from .validator import ValidationResult, pre_filter_candidate, validate_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,12 @@ class DiscoveryEngine:
         result = DiscoveryCycleResult()
 
         try:
+            # 0. Clean up stale/bad candidates before validation
+            cleaned = self._cleanup_stale_candidates(db)
+            if cleaned:
+                logger.info("Pre-cleanup: rejected %d stale/bad candidates", cleaned)
+                db.flush()
+
             # 1. Analyze deal history
             insights = analyze_deal_history(db)
             logger.info(
@@ -133,6 +139,16 @@ class DiscoveryEngine:
                         break
 
                     proposal = _kc_to_proposal(kc)
+
+                    # Free pre-filter: reject bad candidates without spending tokens
+                    rejection = pre_filter_candidate(proposal)
+                    if rejection:
+                        kc.status = "rejected"
+                        kc.validation_result = json.dumps({"pre_filter_rejection": rejection})
+                        kc.resolved_at = datetime.now(timezone.utc)
+                        result.candidates_validated += 1
+                        continue
+
                     vresult = await validate_candidate(
                         proposal, self._scraper, self._keepa, token_budget
                     )
@@ -144,9 +160,12 @@ class DiscoveryEngine:
                     kc.resolved_at = datetime.now(timezone.utc)
 
                     if vresult.is_valid:
-                        self._register_keyword(kc, db)
-                        kc.status = "auto_added"
-                        result.keywords_added += 1
+                        if kc.confidence >= settings.discovery_auto_add_threshold:
+                            self._register_keyword(kc, db)
+                            kc.status = "auto_added"
+                            result.keywords_added += 1
+                        else:
+                            kc.status = "validated"
                     else:
                         kc.status = "rejected"
 
@@ -238,6 +257,50 @@ class DiscoveryEngine:
             db.close()
 
         return result
+
+    @staticmethod
+    def _cleanup_stale_candidates(db) -> int:
+        """Reject old pending candidates (>7 days) and those failing pre-filter."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        now = datetime.now(timezone.utc)
+        rejected = 0
+
+        # Reject stale candidates
+        stale = (
+            db.query(KeywordCandidate)
+            .filter(
+                KeywordCandidate.status == "pending",
+                KeywordCandidate.created_at < cutoff,
+            )
+            .all()
+        )
+        for kc in stale:
+            kc.status = "rejected"
+            kc.resolved_at = now
+            kc.validation_result = json.dumps({"stale": True})
+            rejected += 1
+
+        # Pre-filter remaining pending candidates
+        remaining = (
+            db.query(KeywordCandidate)
+            .filter(KeywordCandidate.status == "pending")
+            .all()
+        )
+        for kc in remaining:
+            from .generator import CandidateProposal
+            proposal = CandidateProposal(
+                keyword=kc.keyword, strategy=kc.strategy,
+                confidence=kc.confidence, parent_keyword_id=kc.parent_keyword_id,
+                reasoning=kc.reasoning,
+            )
+            reason = pre_filter_candidate(proposal)
+            if reason:
+                kc.status = "rejected"
+                kc.resolved_at = now
+                kc.validation_result = json.dumps({"pre_filter_rejection": reason})
+                rejected += 1
+
+        return rejected
 
     def _calculate_token_budget(self) -> int:
         """Calculate Keepa token budget for this discovery cycle."""
