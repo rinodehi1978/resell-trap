@@ -37,6 +37,7 @@ class KeepaClient:
         self._api_key = settings.keepa_api_key
         self._client = httpx.AsyncClient(timeout=30.0)
         self._tokens_left: int | None = None
+        self._throttled_until: float = 0.0  # monotonic time until which we're throttled
         # TTL-based cache: key -> (timestamp, results)
         self._search_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -100,6 +101,8 @@ class KeepaClient:
             else:
                 del self._search_cache[cache_key]
 
+        self._check_throttle()
+
         params = {
             "key": self._api_key,
             "domain": DOMAIN_JP,
@@ -114,10 +117,7 @@ class KeepaClient:
             raise KeepaApiError(f"Keepa HTTP error: {e}") from e
 
         if resp.status_code != 200:
-            raise KeepaApiError(
-                f"Keepa API returned {resp.status_code}: {resp.text}",
-                tokens_left=self._tokens_left,
-            )
+            self._handle_error_response(resp)
 
         data = resp.json()
         self._tokens_left = data.get("tokensLeft")
@@ -157,6 +157,8 @@ class KeepaClient:
         Returns:
             List of product data dicts with full details.
         """
+        self._check_throttle()
+
         params = {
             "key": self._api_key,
             "domain": DOMAIN_JP,
@@ -169,10 +171,7 @@ class KeepaClient:
             raise KeepaApiError(f"Keepa HTTP error: {e}") from e
 
         if resp.status_code != 200:
-            raise KeepaApiError(
-                f"Keepa API returned {resp.status_code}: {resp.text}",
-                tokens_left=self._tokens_left,
-            )
+            self._handle_error_response(resp)
 
         data = resp.json()
         self._tokens_left = data.get("tokensLeft")
@@ -204,6 +203,41 @@ class KeepaClient:
         """Remaining API tokens (updated after each request)."""
         return self._tokens_left
 
+    @property
+    def is_throttled(self) -> bool:
+        """True if we're currently rate-limited (429 received recently)."""
+        if self._throttled_until <= 0:
+            return False
+        return monotonic() < self._throttled_until
+
+    def _check_throttle(self) -> None:
+        """Raise immediately if we're throttled — avoids wasting API calls."""
+        if self.is_throttled:
+            wait_sec = int(self._throttled_until - monotonic())
+            raise KeepaApiError(
+                f"Keepa API throttled (wait ~{wait_sec}s)",
+                tokens_left=self._tokens_left,
+            )
+
+    def _handle_error_response(self, resp: httpx.Response) -> None:
+        """Parse error responses (especially 429) and update internal state."""
+        if resp.status_code == 429:
+            try:
+                data = resp.json()
+                self._tokens_left = data.get("tokensLeft", self._tokens_left)
+                refill_in = data.get("refillIn", 60000)  # ms
+                self._throttled_until = monotonic() + refill_in / 1000.0
+                logger.warning(
+                    "Keepa 429: tokensLeft=%s, refillIn=%dms — throttled for %ds",
+                    self._tokens_left, refill_in, int(refill_in / 1000),
+                )
+            except Exception:
+                self._throttled_until = monotonic() + 60.0  # safe fallback
+        raise KeepaApiError(
+            f"Keepa API returned {resp.status_code}: {resp.text}",
+            tokens_left=self._tokens_left,
+        )
+
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()
@@ -215,6 +249,8 @@ class KeepaClient:
         history: bool,
     ) -> list[dict[str, Any]]:
         """Execute a product query against the Keepa API."""
+        self._check_throttle()
+
         params = {
             "key": self._api_key,
             "domain": DOMAIN_JP,
@@ -229,10 +265,7 @@ class KeepaClient:
             raise KeepaApiError(f"Keepa HTTP error: {e}") from e
 
         if resp.status_code != 200:
-            raise KeepaApiError(
-                f"Keepa API returned {resp.status_code}: {resp.text}",
-                tokens_left=self._tokens_left,
-            )
+            self._handle_error_response(resp)
 
         data = resp.json()
         self._tokens_left = data.get("tokensLeft")

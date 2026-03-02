@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..config import settings
 from ..database import SessionLocal
+from ..keepa import KeepaApiError
 from ..keepa.analyzer import score_deal
 from ..matcher import (
     extract_accessory_signals_from_text,
@@ -464,7 +465,13 @@ class DealScanner:
 
             scanned = 0
             for kw in keywords:
-                # Check Keepa token budget before each keyword
+                # Check Keepa token budget and throttle state before each keyword
+                if self._keepa.is_throttled:
+                    logger.info(
+                        "Keepa throttled, pausing Phase 2 after %d/%d keywords.",
+                        scanned, len(keywords),
+                    )
+                    break
                 tokens = self._keepa.tokens_left
                 if tokens is not None and tokens <= 5:
                     logger.info(
@@ -645,9 +652,18 @@ class DealScanner:
         searches_done = 0
         targeted_keepa: dict[tuple[str | None, frozenset[str]], list[dict]] = {}
 
+        keepa_exhausted = False
         for group_key, listings in targeted_groups.items():
-            if searches_done >= max_searches:
+            if searches_done >= max_searches or keepa_exhausted:
                 # Budget exhausted — move remaining to fallback
+                fallback_listings.extend(listings)
+                continue
+
+            # Proactive token check before each Keepa search
+            tokens = self._keepa.tokens_left
+            if tokens is not None and tokens <= 5:
+                logger.info("Keepa tokens low (%s) — stopping targeted searches", tokens)
+                keepa_exhausted = True
                 fallback_listings.extend(listings)
                 continue
 
@@ -667,13 +683,20 @@ class DealScanner:
                 searches_done += 1
                 logger.debug("Targeted Keepa search: '%s' → %d results", query, len(keepa_products or []))
                 await asyncio.sleep(0.1)  # yield to event loop for health checks
+            except KeepaApiError as e:
+                logger.warning("Targeted Keepa search failed for '%s': %s", query, e)
+                fallback_listings.extend(listings)
+                # Stop all Keepa searches if throttled or tokens exhausted
+                if self._keepa.is_throttled or (self._keepa.tokens_left is not None and self._keepa.tokens_left <= 0):
+                    logger.info("Keepa exhausted/throttled — skipping remaining targeted searches")
+                    keepa_exhausted = True
             except Exception as e:
                 logger.warning("Targeted Keepa search failed for '%s': %s", query, e)
                 fallback_listings.extend(listings)
 
         # Step 4: Fallback Keepa search for items without model numbers
         fallback_keepa: list[dict] = []
-        if fallback_listings:
+        if fallback_listings and not keepa_exhausted:
             try:
                 fallback_keepa = await self._keepa.search_products(
                     keyword, stats=settings.keepa_default_stats_days
