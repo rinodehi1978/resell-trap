@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from ..config import settings
 from ..keepa.analyzer import score_deal
+from ..matcher import is_valid_model
 from .generator import CandidateProposal
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,13 @@ def pre_filter_candidate(candidate: CandidateProposal) -> str | None:
     # Contains 8+ consecutive digits (embedded barcode)
     if _BARCODE_IN_KEYWORD_RE.search(kw):
         return "Contains barcode-like digit sequence"
+
+    # Reject common-word + version patterns (e.g. "switch4", "bluetooth8")
+    # Check each word in the keyword (handles "brand model" format)
+    for token in kw.split():
+        if re.search(r"[a-zA-Z]", token) and re.search(r"[0-9]", token):
+            if not is_valid_model(token):
+                return f"False model number: '{token}' (common word + version)"
 
     return None
 

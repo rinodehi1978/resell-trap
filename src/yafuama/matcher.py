@@ -391,6 +391,71 @@ def extract_model_numbers_from_text(text: str) -> set[str]:
     return _extract_model_numbers(canon)
 
 
+# ---------------------------------------------------------------------------
+# Model-number validation (shared by deal_scanner + AI discovery)
+# ---------------------------------------------------------------------------
+
+_JAPANESE_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
+
+# Pattern: pure "word + trailing digits (+ optional 1 letter)" e.g. switch2, bluetooth6a
+_WORD_VERSION_RE = re.compile(r"^([a-zA-Z]+?)(\d+[a-zA-Z]?)$")
+
+# Common English / tech words that get version numbers appended.
+# "switch2", "bluetooth6", "hero13" etc. are NOT model numbers.
+COMMON_WORDS = frozenset({
+    # Tech / interface
+    "bluetooth", "wifi", "wireless", "usb", "hdmi", "thunderbolt",
+    "displayport", "ethernet", "firewire", "miracast",
+    # OS / platform
+    "windows", "android", "linux", "chrome", "ubuntu", "macos",
+    # Gaming
+    "switch", "playstation", "xbox", "nintendo", "gameboy", "wii",
+    # Product lines used generically
+    "kindle", "echo", "fire", "pixel", "surface", "galaxy",
+    "iphone", "ipad", "macbook", "airpod", "airpods", "imac",
+    # Marketing / version descriptors
+    "super", "ultra", "pro", "max", "mini", "plus", "lite", "air",
+    "go", "hero", "prime", "neo", "ace", "zero", "one", "two",
+    "basic", "classic", "standard", "premium", "elite", "advanced",
+    "smart", "digital", "portable", "slim", "micro", "nano",
+    "mega", "turbo", "hyper", "dual", "triple", "quad",
+    # Generic product terms
+    "version", "model", "type", "series", "generation", "edition",
+    "mark", "level", "stage", "phase", "step", "grade", "wave",
+    "note", "tab", "pad", "book", "box", "hub", "dock", "port",
+    "link", "net", "web", "cloud", "stream", "play", "sound",
+    "home", "studio", "office", "core", "server", "master",
+    # Categories
+    "camera", "speaker", "monitor", "printer", "scanner", "screen",
+    "router", "modem", "adapter", "charger", "cable", "motor",
+    "projector", "sensor", "remote", "controller", "laser",
+    "processor", "memory", "battery", "channel",
+})
+
+
+def is_valid_model(s: str) -> bool:
+    """Check if a string looks like a real model number.
+
+    A valid model number must:
+    - Contain at least one ASCII letter and one ASCII digit
+    - Contain NO Japanese characters
+    - NOT be a common word + version number (e.g. switch2, bluetooth6)
+    """
+    stripped = re.sub(r"[-\u30fc\s]", "", s)
+    has_letter = bool(re.search(r"[a-zA-Z]", stripped))
+    has_digit = bool(re.search(r"[0-9]", stripped))
+    has_japanese = bool(_JAPANESE_RE.search(stripped))
+    if not (has_letter and has_digit and not has_japanese):
+        return False
+
+    # Reject "common_word + version_number" pattern
+    m = _WORD_VERSION_RE.match(stripped)
+    if m and m.group(1).lower() in COMMON_WORDS:
+        return False
+
+    return True
+
+
 def extract_accessory_signals_from_text(text: str) -> bool:
     """Check if arbitrary text contains accessory/parts language."""
     norm = normalize(text)
