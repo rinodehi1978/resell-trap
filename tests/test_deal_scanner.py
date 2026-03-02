@@ -269,6 +269,43 @@ class TestNormalizeModel:
         assert DealScanner._normalize_model("ecam35015bh") == "ecam35015bh"
 
 
+class TestIsValidModel:
+    """Test _is_valid_model classmethod."""
+
+    def test_valid_alphanumeric_model(self):
+        assert DealScanner._is_valid_model("WH-1000XM5") is True
+
+    def test_valid_no_hyphen(self):
+        assert DealScanner._is_valid_model("SV18FF") is True
+
+    def test_valid_lowercase(self):
+        assert DealScanner._is_valid_model("ecam35015bh") is True
+
+    def test_reject_pure_japanese(self):
+        assert DealScanner._is_valid_model("ワイヤレスイヤホン") is False
+
+    def test_reject_japanese_with_digit(self):
+        assert DealScanner._is_valid_model("スイッチ2") is False
+
+    def test_reject_no_digit(self):
+        assert DealScanner._is_valid_model("Bluetooth") is False
+
+    def test_reject_no_letter(self):
+        assert DealScanner._is_valid_model("12345") is False
+
+    def test_reject_japanese_with_alphanumeric(self):
+        assert DealScanner._is_valid_model("ブルートゥース6") is False
+
+    def test_valid_cfi_model(self):
+        assert DealScanner._is_valid_model("CFI-2000A") is True
+
+    def test_reject_brand_name(self):
+        assert DealScanner._is_valid_model("Nintendo") is False
+
+    def test_reject_switch(self):
+        assert DealScanner._is_valid_model("Switch") is False
+
+
 class TestExtractYahooKeywords:
     """Test _extract_yahoo_keywords method."""
 
@@ -320,6 +357,26 @@ class TestExtractYahooKeywords:
 
     def test_no_model_returns_empty(self, scanner):
         product = {"model": "", "title": "中古 掃除機 コードレス 軽量タイプ"}
+        result = scanner._extract_yahoo_keywords(product)
+        assert result == []
+
+    def test_japanese_model_field_rejected(self, scanner):
+        """Keepa model field with Japanese text should be rejected."""
+        product = {"model": "ワイヤレスイヤホン", "title": "Bluetooth ワイヤレスイヤホン"}
+        result = scanner._extract_yahoo_keywords(product)
+        assert result == []
+
+    def test_japanese_digit_model_rejected(self, scanner):
+        """Model field like 'スイッチ2' should be rejected."""
+        product = {"model": "スイッチ2", "title": "Nintendo Switch 2"}
+        result = scanner._extract_yahoo_keywords(product)
+        # No valid model in model field; title may yield something
+        # but "Switch" alone has no digit → empty
+        assert result == []
+
+    def test_brand_only_model_rejected(self, scanner):
+        """Pure brand name (no digit) should be rejected."""
+        product = {"model": "Nintendo", "title": "Nintendo Switch ゲーム機"}
         result = scanner._extract_yahoo_keywords(product)
         assert result == []
 

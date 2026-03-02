@@ -51,36 +51,56 @@ class DealScanner:
 
     # ── Helper methods for Product Finder pipeline ──────────────────────
 
+    _JAPANESE_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
+
     @staticmethod
     def _normalize_model(model: str) -> str:
         """Normalize model number for comparison: lowercase + remove hyphens."""
         return re.sub(r"[-\u30fc]", "", model.lower())
 
+    @classmethod
+    def _is_valid_model(cls, s: str) -> bool:
+        """Check if a string looks like a real model number.
+
+        A valid model number must:
+        - Contain at least one ASCII letter
+        - Contain at least one ASCII digit
+        - Contain NO Japanese characters (hiragana, katakana, kanji)
+        """
+        stripped = re.sub(r"[-\u30fc\s]", "", s)
+        has_letter = bool(re.search(r"[a-zA-Z]", stripped))
+        has_digit = bool(re.search(r"[0-9]", stripped))
+        has_japanese = bool(cls._JAPANESE_RE.search(stripped))
+        return has_letter and has_digit and not has_japanese
+
     def _extract_yahoo_keywords(self, keepa_product: dict) -> list[str]:
         """Extract Yahoo search keywords from a Keepa product.
 
         Priority:
-        1. product["model"] field (if not a barcode)
+        1. product["model"] field (if not a barcode and looks like a model number)
         2. Model numbers from title (fallback)
 
         Rules:
         - No model number → empty list (exclude)
         - Model ≤4 chars → exclude
         - Model ≥5 chars → use as keyword
+        - Must contain ASCII letter + digit, no Japanese chars
         - Max 3 keywords per product
         """
         models: list[str] = []
 
         # Try model field first
         model_field = (keepa_product.get("model") or "").strip()
-        if model_field and not _is_barcode(model_field) and len(model_field) >= 5:
+        if (model_field and not _is_barcode(model_field)
+                and len(model_field) >= 5 and self._is_valid_model(model_field)):
             models.append(model_field)
 
         # Fallback: extract from title
         if not models:
             title = keepa_product.get("title") or ""
             title_models = extract_model_numbers_from_text(title)
-            models = [m for m in title_models if len(m) >= 5]
+            models = [m for m in title_models
+                      if len(m) >= 5 and self._is_valid_model(m)]
 
         # Deduplicate by normalized form
         seen: set[str] = set()
