@@ -364,6 +364,8 @@ class MonitorScheduler:
         Keeps ended items visible for user review. Only auto-cleans
         items that have been ended for 7+ days (fallback cleanup).
         Skips relist candidates (ended_no_winner with ASIN within check window).
+        Never deletes items that were listed on Amazon (have amazon_asin)
+        to prevent orphaned Seller Central listings.
         """
         cutoff = now - timedelta(days=7)
         relist_cutoff = now - timedelta(days=settings.relist_check_max_days)
@@ -374,6 +376,8 @@ class MonitorScheduler:
                 MonitoredItem.amazon_listing_status != "active",
                 MonitoredItem.amazon_listing_status != "error",
                 MonitoredItem.updated_at < cutoff,
+                # Never delete items that were listed on Amazon
+                MonitoredItem.amazon_asin.is_(None),
             )
             .all()
         )

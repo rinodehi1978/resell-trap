@@ -61,11 +61,11 @@ class ListingSyncChecker:
                     if count >= 2:
                         # 2回連続で見つからない → セラセン側で削除された
                         logger.warning(
-                            "Listing gone from Amazon: SKU=%s (auction=%s) — clearing local state",
+                            "Listing gone from Amazon: SKU=%s (auction=%s) — marking delisted (SKU preserved)",
                             item.amazon_sku, item.auction_id,
                         )
                         old_sku = item.amazon_sku
-                        item.amazon_sku = None
+                        # Keep amazon_sku for cross-reference — do NOT set to None
                         item.amazon_listing_status = "delisted"
                         item.amazon_last_synced_at = None
                         item.updated_at = datetime.now(timezone.utc)
