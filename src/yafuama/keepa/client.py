@@ -38,6 +38,7 @@ class KeepaClient:
         self._api_key = settings.keepa_api_key
         self._client = httpx.AsyncClient(timeout=30.0)
         self._tokens_left: int | None = None
+        self._tokens_updated_at: float = 0.0  # monotonic time of last token update
         self._throttled_until: float = 0.0  # monotonic time until which we're throttled
         # TTL-based cache: key -> (timestamp, results)
         self._search_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -125,7 +126,7 @@ class KeepaClient:
             self._handle_error_response(resp)
 
         data = resp.json()
-        self._tokens_left = data.get("tokensLeft")
+        self._update_tokens(data)
         consumed = data.get("tokensConsumed", "?")
         logger.info(
             "Keepa /search '%s' (stats=%s): consumed=%s, left=%s, results=%d",
@@ -190,7 +191,7 @@ class KeepaClient:
             self._handle_error_response(resp)
 
         data = resp.json()
-        self._tokens_left = data.get("tokensLeft")
+        self._update_tokens(data)
         consumed = data.get("tokensConsumed", "?")
         logger.info(
             "Keepa /query (Product Finder): consumed=%s, left=%s",
@@ -225,7 +226,17 @@ class KeepaClient:
 
     @property
     def tokens_left(self) -> int | None:
-        """Remaining API tokens (updated after each request)."""
+        """Remaining API tokens (updated after each request).
+
+        Returns None if no data or if the value is stale (>120s old),
+        since tokens refill continuously at ~25/min.
+        """
+        if self._tokens_left is None:
+            return None
+        # Stale token count: tokens refill at ~25/min, so a 2+ min old value
+        # could be off by 50+. Treat as unknown to avoid false "low" signals.
+        if monotonic() - self._tokens_updated_at > 120:
+            return None
         return self._tokens_left
 
     @property
@@ -234,6 +245,11 @@ class KeepaClient:
         if self._throttled_until <= 0:
             return False
         return monotonic() < self._throttled_until
+
+    def _update_tokens(self, data: dict) -> None:
+        """Update token count and timestamp from API response."""
+        self._tokens_left = data.get("tokensLeft")
+        self._tokens_updated_at = monotonic()
 
     def _check_throttle(self) -> None:
         """Raise immediately if we're throttled — avoids wasting API calls."""
@@ -249,7 +265,7 @@ class KeepaClient:
         if resp.status_code == 429:
             try:
                 data = resp.json()
-                self._tokens_left = data.get("tokensLeft", self._tokens_left)
+                self._update_tokens(data)
                 refill_in = data.get("refillIn", 60000)  # ms
                 self._throttled_until = monotonic() + refill_in / 1000.0
                 logger.warning(
@@ -293,7 +309,7 @@ class KeepaClient:
             self._handle_error_response(resp)
 
         data = resp.json()
-        self._tokens_left = data.get("tokensLeft")
+        self._update_tokens(data)
         consumed = data.get("tokensConsumed", "?")
         n_products = len(data.get("products") or [])
         logger.info(
