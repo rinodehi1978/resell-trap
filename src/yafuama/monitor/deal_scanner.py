@@ -58,6 +58,17 @@ class DealScanner:
         """Normalize model number for comparison: lowercase + remove hyphens."""
         return re.sub(r"[-\u30fc]", "", model.lower())
 
+    @staticmethod
+    def _is_book_asin(asin: str) -> bool:
+        """Check if ASIN is likely a book (ISBN-10: all digits, or ISBN-13: starts with 978/979)."""
+        if not asin:
+            return False
+        if asin.isdigit():
+            return True
+        if len(asin) == 13 and asin.startswith(("978", "979")) and asin[3:].isdigit():
+            return True
+        return False
+
     @classmethod
     def _is_valid_model(cls, s: str) -> bool:
         """Check if a string looks like a real model number.
@@ -334,6 +345,11 @@ class DealScanner:
         Shared by both Phase 1 (Product Finder) and Phase 2 (manual keywords).
         Returns a deal summary dict or None if skipped.
         """
+        # Reject book ASINs (ISBN format: all digits)
+        if self._is_book_asin(deal.amazon_asin):
+            logger.debug("Skipping book ASIN: %s (%s)", deal.amazon_asin, deal.yahoo_title[:50])
+            return None
+
         # Check if already notified (exact auction+ASIN match)
         existing = (
             db.query(DealAlert)
@@ -744,6 +760,17 @@ class DealScanner:
                         result.keepa_model_match = True
 
             if not result.is_likely_match:
+                continue
+
+            # Require model number overlap when Yahoo item has model numbers.
+            # This prevents brand-only matches (e.g., OLYMPUS OM-1 → OLYMPUS XZ-1).
+            yahoo_models_extracted = extract_model_numbers_from_text(yahoo_title)
+            if yahoo_models_extracted and not result.model_match and not getattr(result, "keepa_model_match", False):
+                continue
+
+            # Reject book ASINs (ISBN)
+            _kp_asin = kp.get("asin", "")
+            if self._is_book_asin(_kp_asin):
                 continue
 
             # Check rejection-learned blocked pairs and never-show pairs
