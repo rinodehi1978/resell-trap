@@ -28,6 +28,7 @@ def keepa_minutes_to_datetime(minutes: int) -> datetime:
 
 
 _SEARCH_CACHE_MAX = 100  # Max cached search results
+_NEGATIVE_CACHE_TTL = 21600  # 6 hours for 0-result searches (won't appear in Keepa soon)
 
 
 class KeepaClient:
@@ -87,7 +88,6 @@ class KeepaClient:
         """Search Keepa product database by keyword.
 
         Returns up to 40 product dicts with stats.
-        Each result costs 1 token.
         Results are cached in-memory per scan cycle.
         """
         stat_days = stats or settings.keepa_default_stats_days
@@ -95,8 +95,13 @@ class KeepaClient:
         cached = self._search_cache.get(cache_key)
         if cached is not None:
             ts, products = cached
-            if monotonic() - ts < settings.keepa_cache_ttl:
-                logger.debug("Keepa search cache hit: %s", term)
+            # Negative results (empty) use longer TTL to avoid wasting tokens
+            ttl = _NEGATIVE_CACHE_TTL if not products else settings.keepa_cache_ttl
+            if monotonic() - ts < ttl:
+                if not products:
+                    logger.debug("Keepa negative cache hit: '%s' (no results)", term)
+                else:
+                    logger.debug("Keepa search cache hit: %s", term)
                 return products
             else:
                 del self._search_cache[cache_key]
@@ -121,17 +126,28 @@ class KeepaClient:
 
         data = resp.json()
         self._tokens_left = data.get("tokensLeft")
+        consumed = data.get("tokensConsumed", "?")
+        logger.info(
+            "Keepa /search '%s' (stats=%s): consumed=%s, left=%s, results=%d",
+            term, params.get("stats", "none"), consumed, self._tokens_left,
+            len(data.get("products") or []),
+        )
 
         if self._tokens_left is not None and self._tokens_left <= 0:
             logger.warning("Keepa API tokens exhausted (tokensLeft=%s)", self._tokens_left)
 
         products = data.get("products")
         if products is None:
-            error_msg = data.get("error", "Unknown error")
-            raise KeepaApiError(
-                f"Keepa search error: {error_msg}",
-                tokens_left=self._tokens_left,
+            # No results — cache as negative to avoid wasting tokens on repeat queries
+            if len(self._search_cache) >= _SEARCH_CACHE_MAX:
+                oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
+                del self._search_cache[oldest_key]
+            self._search_cache[cache_key] = (monotonic(), [])
+            logger.info(
+                "Keepa search '%s': no products found (negative cached for %dh)",
+                term, _NEGATIVE_CACHE_TTL // 3600,
             )
+            return []
 
         if len(self._search_cache) >= _SEARCH_CACHE_MAX:
             # Evict oldest entry
@@ -175,6 +191,11 @@ class KeepaClient:
 
         data = resp.json()
         self._tokens_left = data.get("tokensLeft")
+        consumed = data.get("tokensConsumed", "?")
+        logger.info(
+            "Keepa /query (Product Finder): consumed=%s, left=%s",
+            consumed, self._tokens_left,
+        )
 
         if self._tokens_left is not None and self._tokens_left <= 0:
             logger.warning("Keepa API tokens exhausted (tokensLeft=%s)", self._tokens_left)
@@ -194,7 +215,11 @@ class KeepaClient:
     def clear_search_cache(self) -> None:
         """Evict expired entries from the cache (called at start of each scan cycle)."""
         now = monotonic()
-        expired = [k for k, (ts, _) in self._search_cache.items() if now - ts >= settings.keepa_cache_ttl]
+        expired = []
+        for k, (ts, products) in self._search_cache.items():
+            ttl = _NEGATIVE_CACHE_TTL if not products else settings.keepa_cache_ttl
+            if now - ts >= ttl:
+                expired.append(k)
         for k in expired:
             del self._search_cache[k]
 
@@ -269,6 +294,12 @@ class KeepaClient:
 
         data = resp.json()
         self._tokens_left = data.get("tokensLeft")
+        consumed = data.get("tokensConsumed", "?")
+        n_products = len(data.get("products") or [])
+        logger.info(
+            "Keepa /product (%d ASINs, stats=%s): consumed=%s, left=%s, returned=%d",
+            len(asins), stats, consumed, self._tokens_left, n_products,
+        )
 
         if self._tokens_left is not None and self._tokens_left <= 0:
             logger.warning("Keepa API tokens exhausted (tokensLeft=%s)", self._tokens_left)

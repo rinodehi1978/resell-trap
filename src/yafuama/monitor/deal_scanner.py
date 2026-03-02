@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 YAHOO_AUCTION_URL = "https://auctions.yahoo.co.jp/jp/auction/{}"
 
+# Patterns for filtering garbage Keepa search queries (40 tokens wasted per empty search)
+_HEX_LIKE_RE = re.compile(r"^[0-9a-f]{6,}$", re.IGNORECASE)
+_SERIAL_RE = re.compile(r"^\d{4,}[a-z]?$", re.IGNORECASE)  # 4+ digits with optional letter
+_LONG_GARBAGE_RE = re.compile(r"^\w{16,}$")  # Very long single tokens (serial numbers)
+_DIGIT_PREFIX_WORD_RE = re.compile(r"^\d{1,2}[a-z]{3,}$", re.IGNORECASE)  # "1chav" from "1ch AVアンプ"
+_LOT_NUMBER_RE = re.compile(r"^[a-z]\d{7,}$", re.IGNORECASE)  # "n10902951", "t10873938"
+
 
 class DealScanner:
     """Scans watched keywords for profitable Yahoo→Amazon deals and sends notifications."""
@@ -75,6 +82,38 @@ class DealScanner:
     def _is_valid_model(s: str) -> bool:
         """Delegate to shared is_valid_model in matcher module."""
         return is_valid_model(s)
+
+    @staticmethod
+    def _clean_keepa_query(query: str) -> str:
+        """Remove garbage tokens from Keepa search queries.
+
+        Strips serial numbers, hex strings, and other noise extracted from
+        Yahoo titles that cause 0-result searches (40 tokens wasted each).
+        Returns cleaned query, or empty string if nothing valid remains.
+        """
+        clean_tokens = []
+        for token in query.split():
+            # Too short to be meaningful
+            if len(token) < 3:
+                continue
+            # Very long single token = serial number / lot code
+            if _LONG_GARBAGE_RE.match(token):
+                continue
+            # Hex-like string (02257f, 1230b00ff, etc.)
+            if _HEX_LIKE_RE.match(token):
+                continue
+            # Pure serial number: 4+ digits with optional trailing letter (1798f, 12345a)
+            if _SERIAL_RE.match(token):
+                continue
+            # Digit-prefix word: "1chav" from "1ch AVアンプ" misparse
+            if _DIGIT_PREFIX_WORD_RE.match(token):
+                continue
+            # Lot/serial number: single letter + 7+ digits (n10902951, t10873938)
+            if _LOT_NUMBER_RE.match(token):
+                continue
+            clean_tokens.append(token)
+
+        return " ".join(clean_tokens)
 
     def _extract_yahoo_keywords(self, keepa_product: dict) -> list[str]:
         """Extract Yahoo search keywords from a Keepa product.
@@ -675,17 +714,31 @@ class DealScanner:
             query_parts.extend(sorted(models)[:2])
             query = " ".join(query_parts)
 
+            # Clean garbage tokens that cause 0-result searches (40 tokens wasted each)
+            clean_query = self._clean_keepa_query(query)
+            if not clean_query:
+                logger.debug("Skipping all-garbage Keepa query: '%s'", query)
+                fallback_listings.extend(listings)
+                continue
+            if clean_query != query:
+                logger.debug("Cleaned Keepa query: '%s' → '%s'", query, clean_query)
+            query = clean_query
+
             try:
                 keepa_products = await self._keepa.search_products(
                     query, stats=settings.keepa_default_stats_days
                 )
                 targeted_keepa[group_key] = keepa_products or []
                 searches_done += 1
+                if not keepa_products:
+                    # 0 results — let these items try through fallback search
+                    fallback_listings.extend(listings)
                 logger.debug("Targeted Keepa search: '%s' → %d results", query, len(keepa_products or []))
-                await asyncio.sleep(0.1)  # yield to event loop for health checks
+                await asyncio.sleep(0.1)
             except KeepaApiError as e:
                 logger.warning("Targeted Keepa search failed for '%s': %s", query, e)
                 fallback_listings.extend(listings)
+                searches_done += 1  # Count failed searches (still consumed tokens)
                 # Stop all Keepa searches if throttled or tokens exhausted
                 if self._keepa.is_throttled or (self._keepa.tokens_left is not None and self._keepa.tokens_left <= 0):
                     logger.info("Keepa exhausted/throttled — skipping remaining targeted searches")
@@ -693,6 +746,7 @@ class DealScanner:
             except Exception as e:
                 logger.warning("Targeted Keepa search failed for '%s': %s", query, e)
                 fallback_listings.extend(listings)
+                searches_done += 1  # Count failed searches
 
         # Step 4: Fallback Keepa search for items without model numbers
         fallback_keepa: list[dict] = []
