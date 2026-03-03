@@ -36,6 +36,11 @@ class SpApiClient:
         self._fee_cache: dict[str, float] = {}  # ASIN → referral fee %
         self._fee_cache_max: int = 200
         self._last_fee_request_at: float = 0.0
+        self._fee_quota_exhausted: bool = False  # Skip fee calls after QuotaExceeded
+
+    def reset_fee_quota(self) -> None:
+        """Reset the QuotaExceeded flag at the start of each scan cycle."""
+        self._fee_quota_exhausted = False
 
     async def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
         loop = asyncio.get_running_loop()
@@ -435,7 +440,7 @@ class SpApiClient:
         if asin in self._fee_cache:
             return self._fee_cache[asin]
 
-        if price <= 0:
+        if price <= 0 or self._fee_quota_exhausted:
             return None
 
         # Rate limiting: 1 req/sec
@@ -455,7 +460,11 @@ class SpApiClient:
                 is_fba=False,
             )
         except AmazonApiError as e:
-            logger.warning("Fee estimate failed for ASIN %s: %s", asin, e)
+            if "QuotaExceeded" in str(e):
+                logger.warning("Fee estimate QuotaExceeded — skipping remaining fee calls this cycle")
+                self._fee_quota_exhausted = True
+            else:
+                logger.warning("Fee estimate failed for ASIN %s: %s", asin, e)
             return None
 
         # Extract referral fee from response

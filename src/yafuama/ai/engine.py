@@ -429,7 +429,7 @@ class DiscoveryEngine:
             )
             kw.performance_score = compute_performance_score(kw, alerts)
 
-            # Auto-delete underperforming AI keywords
+            # Auto-deactivate underperforming AI keywords (keep record to prevent re-proposal)
             if (
                 kw.source != "manual"
                 and kw.is_active
@@ -437,10 +437,11 @@ class DiscoveryEngine:
                 and kw.performance_score < settings.discovery_deactivation_threshold
             ):
                 logger.info(
-                    "Auto-deleting AI keyword: %s (score=%.3f, scans=%d)",
+                    "Auto-deactivating AI keyword: %s (score=%.3f, scans=%d)",
                     kw.keyword, kw.performance_score, kw.total_scans,
                 )
-                db.delete(kw)
+                kw.is_active = False
+                kw.auto_deactivated_at = datetime.now(timezone.utc)
                 deactivated += 1
 
         return deactivated

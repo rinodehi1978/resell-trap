@@ -19,7 +19,7 @@ class MatcherOverrides:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._extra_accessory_words: frozenset[str] = frozenset()
-        self._blocked_pairs: set[tuple[str, str]] = set()
+        self._blocked_pairs: set[str] = set()  # blocked ASINs
         self._never_show_pairs: set[tuple[str, str]] = set()  # (yahoo_title, amazon_title)
         self._threshold_adjustment: float = 0.0
 
@@ -46,13 +46,14 @@ class MatcherOverrides:
             threshold_adj = 0.0
 
             for p in patterns:
-                if p.pattern_type == "accessory_word" and p.hit_count >= 2 and p.confidence >= 0.6:
+                if p.pattern_type == "accessory_word" and p.hit_count >= 1:
                     accessory.add(p.pattern_key)
 
-                elif p.pattern_type == "problem_pair" and p.hit_count >= 2:
+                elif p.pattern_type == "problem_pair":
                     parts = p.pattern_key.split(":", 1)
                     if len(parts) == 2:
-                        blocked_pairs.add((parts[0], parts[1]))
+                        # Block by ASIN (auction_id is unique per listing, ASIN persists)
+                        blocked_pairs.add(parts[1])
 
                 elif p.pattern_type == "never_show_pair":
                     data = _safe_json(p.pattern_data)
@@ -87,7 +88,8 @@ class MatcherOverrides:
             return self._extra_accessory_words
 
     @property
-    def blocked_pairs(self) -> set[tuple[str, str]]:
+    def blocked_pairs(self) -> set[str]:
+        """Set of blocked ASINs (learned from problem_pair rejections)."""
         with self._lock:
             return set(self._blocked_pairs)
 

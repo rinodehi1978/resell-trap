@@ -40,6 +40,7 @@ class KeepaClient:
         self._tokens_left: int | None = None
         self._tokens_updated_at: float = 0.0  # monotonic time of last token update
         self._throttled_until: float = 0.0  # monotonic time until which we're throttled
+        self._last_tokens_consumed: int = 0  # tokens consumed by last API call
         # TTL-based cache: key -> (timestamp, results)
         self._search_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -251,9 +252,15 @@ class KeepaClient:
             return False
         return monotonic() < self._throttled_until
 
+    @property
+    def last_tokens_consumed(self) -> int:
+        """Tokens consumed by the most recent API call."""
+        return self._last_tokens_consumed
+
     def _update_tokens(self, data: dict) -> None:
         """Update token count and timestamp from API response."""
         self._tokens_left = data.get("tokensLeft")
+        self._last_tokens_consumed = data.get("tokensConsumed", 0) or 0
         self._tokens_updated_at = monotonic()
 
     def _check_throttle(self) -> None:

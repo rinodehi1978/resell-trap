@@ -495,6 +495,8 @@ class DealScanner:
         """
         self._deep_validation_count = 0
         self._keepa.clear_search_cache()
+        if self._sp_api is not None:
+            self._sp_api.reset_fee_quota()
         db = SessionLocal()
         try:
             # Phase 1: Product Finder pipeline (Amazon-first)
@@ -596,22 +598,24 @@ class DealScanner:
 
         keywords = db.query(WatchedKeyword).filter(WatchedKeyword.is_active == True).all()  # noqa: E712
         for kw in keywords:
-            # AI-generated: delete after 10 scans with no results
+            # AI-generated: deactivate after 10 scans with no results
             if kw.source != "manual" and kw.total_deals_found == 0 and kw.total_scans >= cleanup_threshold_ai:
                 logger.info(
-                    "Auto-deleting AI keyword '%s': %d scans, 0 deals",
+                    "Auto-deactivating AI keyword '%s': %d scans, 0 deals",
                     kw.keyword, kw.total_scans,
                 )
-                db.delete(kw)
+                kw.is_active = False
+                kw.auto_deactivated_at = datetime.now(timezone.utc)
                 continue
 
-            # Manual + never found a deal: delete after 50 scans
+            # Manual + never found a deal: deactivate after 50 scans
             if kw.source == "manual" and kw.total_deals_found == 0 and kw.total_scans >= cleanup_threshold_manual:
                 logger.info(
-                    "Auto-deleting manual keyword '%s': %d scans, 0 deals",
+                    "Auto-deactivating manual keyword '%s': %d scans, 0 deals",
                     kw.keyword, kw.total_scans,
                 )
-                db.delete(kw)
+                kw.is_active = False
+                kw.auto_deactivated_at = datetime.now(timezone.utc)
                 continue
 
             # Manual + has deals but dormant: pause after 50 consecutive scans without new deal
@@ -870,12 +874,11 @@ class DealScanner:
             if self._is_book_asin(_kp_asin):
                 continue
 
-            # Check rejection-learned blocked pairs and never-show pairs
+            # Check rejection-learned blocked ASINs and never-show pairs
             try:
                 from ..matcher_overrides import overrides
-                _yr_id = yr.auction_id if hasattr(yr, "auction_id") else yr.get("auction_id", "")
                 _kp_asin = kp.get("asin", "")
-                if (_yr_id, _kp_asin) in overrides.blocked_pairs:
+                if _kp_asin in overrides.blocked_pairs:
                     continue
                 # 「二度と出すな」: Yahoo title + Amazon title ペアをチェック
                 if (yahoo_title, amazon_title) in overrides.never_show_pairs:
@@ -1050,7 +1053,9 @@ class DealScanner:
                         {
                             "name": "Yahoo",
                             "value": f"¥{deal.yahoo_price:,}" + (
-                                " (送料無料)" if deal.yahoo_shipping == 0 else f" (+送料¥{deal.yahoo_shipping:,})"
+                                " (送料無料)" if deal.yahoo_shipping == 0
+                                else " (送料不明)" if deal.yahoo_shipping is None
+                                else f" (+送料¥{deal.yahoo_shipping:,})"
                             ),
                             "inline": True,
                         },

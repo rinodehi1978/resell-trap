@@ -631,11 +631,7 @@ def _get_existing_keywords(db: Session) -> set[str]:
     for kw in db.query(WatchedKeyword.keyword).all():
         keywords.add(kw[0].lower().strip())
 
-    for kc in (
-        db.query(KeywordCandidate.keyword)
-        .filter(KeywordCandidate.status.notin_(["rejected"]))
-        .all()
-    ):
+    for kc in db.query(KeywordCandidate.keyword).all():
         keywords.add(kc[0].lower().strip())
 
     return keywords

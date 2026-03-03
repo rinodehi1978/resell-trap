@@ -103,7 +103,7 @@ async def validate_candidate(
             rejection_reason="Keepa token budget exhausted (deferred)",
         )
 
-    # Step 3: Keepa search (costs 1 token)
+    # Step 3: Keepa search
     try:
         keepa_products = await keepa_client.search_products(
             candidate.keyword, stats=settings.keepa_default_stats_days
@@ -113,17 +113,18 @@ async def validate_candidate(
         return ValidationResult(
             is_valid=False,
             yahoo_result_count=yahoo_count,
-            keepa_tokens_used=1,
+            keepa_tokens_used=getattr(keepa_client, "last_tokens_consumed", 1) or 1,
             rejection_reason=f"Keepa search error: {e}",
         )
 
+    actual_tokens = getattr(keepa_client, "last_tokens_consumed", 1) or 1
     keepa_count = len(keepa_products) if keepa_products else 0
     if keepa_count == 0:
         return ValidationResult(
             is_valid=False,
             yahoo_result_count=yahoo_count,
             keepa_result_count=0,
-            keepa_tokens_used=1,
+            keepa_tokens_used=actual_tokens,
             rejection_reason="No Keepa results (no Amazon demand)",
         )
 
@@ -162,7 +163,7 @@ async def validate_candidate(
             is_valid=False,
             yahoo_result_count=yahoo_count,
             keepa_result_count=keepa_count,
-            keepa_tokens_used=1,
+            keepa_tokens_used=actual_tokens,
             rejection_reason="No profitable deals found in top matches",
         )
 
@@ -173,5 +174,5 @@ async def validate_candidate(
         potential_deals=deals_found,
         best_margin=best_margin,
         best_profit=best_profit,
-        keepa_tokens_used=1,
+        keepa_tokens_used=actual_tokens,
     )

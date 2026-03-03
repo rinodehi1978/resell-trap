@@ -26,8 +26,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
 
-        # Only protect /api/ endpoints; skip docs, web UI, partials
-        if not path.startswith("/api/"):
+        # Protect /api/ endpoints and mutation routes under /web/
+        is_api = path.startswith("/api/")
+        is_web_mutation = path.startswith("/web/") and request.method in ("POST", "PUT", "PATCH", "DELETE")
+        if not is_api and not is_web_mutation:
             return await call_next(request)
 
         # Allow OpenAPI docs and health check
