@@ -448,13 +448,22 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     # condition_note: bodyで上書き可能（コンディション変更時にテンプレート差し替え）
     condition_note = body.get("condition_note") or item.amazon_condition_note or ""
 
-    # Resolve image URLs: body → stored DB → empty
+    # Resolve image URLs: body → stored DB → scrape Yahoo auction page
     image_urls = body.get("image_urls", [])
     if not image_urls and item.amazon_image_urls:
         try:
             image_urls = json.loads(item.amazon_image_urls)
         except (ValueError, TypeError):
             image_urls = []
+    if not image_urls:
+        from ..main import app_state
+        scraper = app_state.get("scraper")
+        if scraper:
+            try:
+                image_urls = await scraper.fetch_auction_images(item.auction_id)
+                logger.info("Relist fallback: scraped %d images from Yahoo for %s", len(image_urls), item.auction_id)
+            except Exception:
+                logger.warning("Relist fallback: failed to scrape images for %s", item.auction_id)
 
     try:
         product_type = await client.get_product_type(item.amazon_asin)
