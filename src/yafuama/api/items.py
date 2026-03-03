@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -218,8 +219,6 @@ def update_checklist(auction_id: str, body: dict, db: Session = Depends(get_db))
 
     Expects: {"lead_time": true, "images": false, ...}
     """
-    import json
-
     item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
     if not item:
         raise HTTPException(404, f"Item {auction_id} not found")

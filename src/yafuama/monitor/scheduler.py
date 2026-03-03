@@ -368,7 +368,6 @@ class MonitorScheduler:
         to prevent orphaned Seller Central listings.
         """
         cutoff = now - timedelta(days=7)
-        relist_cutoff = now - timedelta(days=settings.relist_check_max_days)
         stale = (
             db.query(MonitoredItem)
             .filter(
@@ -381,17 +380,6 @@ class MonitorScheduler:
             )
             .all()
         )
-        # Protect relist candidates from cleanup
-        if settings.relist_check_enabled:
-            stale = [
-                item for item in stale
-                if not (
-                    item.status == "ended_no_winner"
-                    and item.amazon_asin
-                    and item.ended_at
-                    and item.ended_at > relist_cutoff
-                )
-            ]
         if stale:
             for item in stale:
                 logger.info(

@@ -10,8 +10,13 @@ from .config import settings
 connect_args = {}
 if settings.database_url.startswith("sqlite"):
     connect_args["check_same_thread"] = False
+    connect_args["timeout"] = 30  # Wait up to 30s for database locks
 
-engine = create_engine(settings.database_url, connect_args=connect_args)
+engine = create_engine(
+    settings.database_url,
+    connect_args=connect_args,
+    pool_pre_ping=True,
+)
 
 # SQLite: enable WAL mode and busy timeout for concurrent access
 if settings.database_url.startswith("sqlite"):
@@ -20,6 +25,7 @@ if settings.database_url.startswith("sqlite"):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 

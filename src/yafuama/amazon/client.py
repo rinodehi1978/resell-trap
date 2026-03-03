@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from functools import partial
+from io import BytesIO
 from typing import Any
 
 from sp_api.api import CatalogItems, Feeds, ListingsItems, ListingsRestrictions, Orders, ProductFees
@@ -36,7 +38,7 @@ class SpApiClient:
         self._last_fee_request_at: float = 0.0
 
     async def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(None, partial(fn, *args, **kwargs))
             return result.payload
@@ -155,7 +157,7 @@ class SpApiClient:
         body = {"productType": product_type, "attributes": attributes}
         if offer_only:
             body["requirements"] = "LISTING_OFFER_ONLY"
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
                 None,
@@ -254,6 +256,25 @@ class SpApiClient:
             marketplaceIds=[self._marketplace_id], body=body,
         )
 
+    async def patch_condition_note(
+        self, seller_id: str, sku: str, condition_note: str,
+    ) -> dict:
+        """PATCH condition_note (提供条件に関する注記) onto an existing listing."""
+        api = self._listings_api()
+        body = {
+            "productType": "PRODUCT",
+            "patches": [{
+                "op": "replace",
+                "path": "/attributes/condition_note",
+                "value": [{"value": condition_note, "language_tag": "ja_JP"}],
+            }],
+        }
+        return await self._call(
+            api.patch_listings_item,
+            sellerId=seller_id, sku=sku,
+            marketplaceIds=[self._marketplace_id], body=body,
+        )
+
     async def patch_offer_images(
         self, seller_id: str, sku: str, image_urls: list[str],
     ) -> dict:
@@ -287,9 +308,6 @@ class SpApiClient:
 
     async def submit_price_feed(self, seller_id: str, sku: str, price_jpy: int) -> dict:
         """Submit a JSON_LISTINGS_FEED to update price in Seller Central."""
-        import json
-        from io import BytesIO
-
         feed_data = {
             "header": {
                 "sellerId": seller_id,
@@ -316,9 +334,6 @@ class SpApiClient:
 
     async def submit_inventory_feed(self, seller_id: str, sku: str, quantity: int, lead_time: int = 4) -> dict:
         """Submit a JSON_LISTINGS_FEED to update inventory in Seller Central."""
-        import json
-        from io import BytesIO
-
         feed_data = {
             "header": {
                 "sellerId": seller_id,
@@ -344,12 +359,9 @@ class SpApiClient:
 
     async def _submit_json_feed(self, feed_data: dict) -> dict:
         """Submit a JSON_LISTINGS_FEED via Feeds API."""
-        import json
-        from io import BytesIO
-
         body = json.dumps(feed_data, ensure_ascii=False).encode("utf-8")
         api = self._feeds_api()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             doc_response, feed_response = await loop.run_in_executor(
                 None,

@@ -12,7 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from yafuama.config import settings  # noqa: E402
 from yafuama.database import Base  # noqa: E402
-from yafuama.models import MonitoredItem, StatusHistory, NotificationLog  # noqa: E402, F401
+from yafuama.models import (  # noqa: E402, F401
+    MonitoredItem, StatusHistory, NotificationLog,
+    WatchedKeyword, DealAlert, KeywordCandidate,
+    DiscoveryLog, ConditionTemplate, ListingPreset,
+    AmazonOrder, RejectionPattern,
+)
 
 config = context.config
 

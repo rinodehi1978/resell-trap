@@ -313,6 +313,13 @@ class DiscoveryEngine:
 
     def _register_keyword(self, kc: KeywordCandidate, db) -> None:
         """Create a WatchedKeyword from an approved candidate."""
+        # Skip if keyword already exists
+        existing = db.query(WatchedKeyword).filter(WatchedKeyword.keyword == kc.keyword).first()
+        if existing:
+            logger.debug("Keyword already exists, skipping: %s", kc.keyword)
+            kc.status = "registered"
+            return
+
         # Check AI keyword cap
         ai_count = (
             db.query(WatchedKeyword)

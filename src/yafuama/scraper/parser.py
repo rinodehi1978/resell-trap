@@ -280,7 +280,7 @@ class SearchResultsParser:
             el = li.select_one(selector)
             if el:
                 text = el.get_text(strip=True)
-                if "無料" in text or "free" in text.lower():
+                if "無料" in text or "送料込" in text or "free" in text.lower():
                     return 0
                 m = self._PRICE_DIGITS_RE.search(text.replace(",", ""))
                 if m:
@@ -288,11 +288,19 @@ class SearchResultsParser:
                         return int(m.group(0))
                     except ValueError:
                         pass
-                return None
+                # Don't return None here — try other selectors and fallback
 
         # Fallback: scan all text for shipping pattern
         full_text = li.get_text()
-        if "送料無料" in full_text:
+        if "送料無料" in full_text or "送料込" in full_text:
             return 0
+
+        # Try to find shipping amount in full text (e.g. "送料880円")
+        ship_m = re.search(r"送料\s*[¥￥]?\s*([\d,]+)\s*円?", full_text)
+        if ship_m:
+            try:
+                return int(ship_m.group(1).replace(",", ""))
+            except ValueError:
+                pass
 
         return None

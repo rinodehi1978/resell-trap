@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..amazon import AmazonApiError
+from ..amazon.listing import ListingParams, submit_to_amazon
 from ..amazon.pricing import calculate_amazon_price, generate_sku
 from ..amazon.shipping import DELIVERY_REGIONS, get_pattern_by_key, get_shipping_patterns
 from ..config import settings
@@ -189,136 +191,61 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
         raise HTTPException(400, f"Invalid shipping_pattern: {body.shipping_pattern}")
     lead_time = pattern.lead_time_days
 
-    _s3_image_urls = None  # Track S3-proxied URLs for DB persistence
-
     try:
-        attributes = {
-            "condition_type": [{"value": condition}],
-            "purchasable_offer": [{
-                "marketplace_id": settings.sp_api_marketplace,
-                "currency": "JPY",
-                "our_price": [{"schedule": [{"value_with_tax": price}]}],
-            }],
-            "fulfillment_availability": [
-                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
-            ],
-        }
-
-        offer_only = False
         if body.asin:
-            # Offer on existing ASIN: use LISTING_OFFER_ONLY mode
-            attributes["merchant_suggested_asin"] = [{
-                "value": body.asin,
-                "marketplace_id": settings.sp_api_marketplace,
-            }]
-            attributes["merchant_shipping_group"] = [{"value": pattern.template_name}]
-            attributes["lead_time_to_ship_max_days"] = [{"value": lead_time}]
-            offer_only = True
-        else:
-            # New product: include shipping attributes
-            attributes["lead_time_to_ship_max_days"] = [{"value": lead_time}]
-            attributes["merchant_shipping_group"] = [{"value": pattern.template_name}]
-
-        if body.condition_note:
-            attributes["condition_note"] = [
-                {"value": body.condition_note, "language_tag": "ja_JP"}
-            ]
-
-        # For new products, include images in the initial PUT
-        if not offer_only and body.image_urls:
-            attributes["main_offer_image_locator"] = [
-                {"media_location": body.image_urls[0]}
-            ]
-            for i, url in enumerate(body.image_urls[1:6]):
-                attributes[f"other_offer_image_locator_{i + 1}"] = [
-                    {"media_location": url}
-                ]
-
-        product_type = await client.get_product_type(body.asin) if body.asin else "PRODUCT"
-
-        # Try with lead_time; if INVALID, retry without it
-        try:
-            await client.create_listing(
-                settings.sp_api_seller_id, sku, product_type, attributes,
-                offer_only=offer_only,
+            # Offer on existing ASIN: use shared submit_to_amazon()
+            product_type = await client.get_product_type(body.asin)
+            result = await submit_to_amazon(
+                client,
+                ListingParams(
+                    seller_id=settings.sp_api_seller_id,
+                    sku=sku,
+                    asin=body.asin,
+                    price=price,
+                    condition=condition,
+                    lead_time=lead_time,
+                    shipping_template=pattern.template_name,
+                    product_type=product_type,
+                    condition_note=body.condition_note or "",
+                    image_urls=body.image_urls or [],
+                    auction_id=body.auction_id,
+                ),
             )
-        except AmazonApiError as e:
-            if "INVALID" in str(e) and offer_only:
-                logger.info("Listing INVALID with lead_time for %s, retrying without", sku)
-                attributes.pop("lead_time_to_ship_max_days", None)
-                await client.create_listing(
-                    settings.sp_api_seller_id, sku, product_type, attributes,
-                    offer_only=offer_only,
-                )
-                # Fallback: try PATCH for lead_time
-                try:
-                    await client.patch_listing_lead_time(
-                        settings.sp_api_seller_id, sku, lead_time,
-                    )
-                except AmazonApiError:
-                    logger.info("lead_time PATCH also failed for %s", sku)
-            else:
-                raise
-
-        # Wait for PUT to be processed before sending PATCHes
-        import asyncio
-        await asyncio.sleep(3)
-
-        # Offer-only: send images separately via PATCH after listing is created
-        # to prevent image issues from causing "不完全" status
-        if offer_only and body.image_urls:
-            # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
-            from ..amazon.image_proxy import upload_images_to_s3
-
-            proxied_urls = await upload_images_to_s3(body.image_urls, body.auction_id)
-            _s3_image_urls = proxied_urls
-            try:
-                await client.patch_offer_images(
-                    settings.sp_api_seller_id, sku, proxied_urls,
-                )
-            except AmazonApiError:
-                logger.warning("Offer image PATCH failed for %s (non-critical)", sku)
-
-        # PATCH price + quantity to trigger listing activation
-        # (PUT alone creates the record but doesn't activate the offer;
-        #  some product types need explicit quantity PATCH to become BUYABLE)
-        if offer_only:
-            try:
-                await client.patch_listing_price(
-                    settings.sp_api_seller_id, sku, price,
-                )
-                logger.info("Activation price PATCH sent for %s (¥%d)", sku, price)
-            except AmazonApiError:
-                logger.warning("Activation price PATCH failed for %s", sku)
-            try:
-                await client.patch_listing_quantity(
-                    settings.sp_api_seller_id, sku, 1,
-                )
-                logger.info("Activation quantity PATCH sent for %s", sku)
-            except AmazonApiError:
-                logger.warning("Activation quantity PATCH failed for %s", sku)
-
-            # Feeds API: セラーセントラルの在庫管理システムに直接反映
-            try:
-                await client.submit_price_feed(
-                    settings.sp_api_seller_id, sku, price,
-                )
-                logger.info("Price feed submitted for %s (¥%d)", sku, price)
-            except AmazonApiError:
-                logger.warning("Price feed failed for %s (non-critical)", sku)
-            try:
-                await client.submit_inventory_feed(
-                    settings.sp_api_seller_id, sku, 1, lead_time,
-                )
-                logger.info("Inventory feed submitted for %s", sku)
-            except AmazonApiError:
-                logger.warning("Inventory feed failed for %s (non-critical)", sku)
-
+        else:
+            # New product (no ASIN): simple PUT with images in attributes
+            attributes = {
+                "condition_type": [{"value": condition}],
+                "purchasable_offer": [{
+                    "marketplace_id": settings.sp_api_marketplace,
+                    "currency": "JPY",
+                    "our_price": [{"schedule": [{"value_with_tax": price}]}],
+                }],
+                "fulfillment_availability": [
+                    {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
+                ],
+                "lead_time_to_ship_max_days": [{"value": lead_time}],
+                "merchant_shipping_group": [{"value": pattern.template_name}],
+            }
+            if body.condition_note:
+                attributes["condition_note"] = [
+                    {"value": body.condition_note, "language_tag": "ja_JP"}
+                ]
+            if body.image_urls:
+                attributes["main_offer_image_locator"] = [
+                    {"media_location": body.image_urls[0]}
+                ]
+                for i, url in enumerate(body.image_urls[1:6]):
+                    attributes[f"other_offer_image_locator_{i + 1}"] = [
+                        {"media_location": url}
+                    ]
+            await client.create_listing(
+                settings.sp_api_seller_id, sku, "PRODUCT", attributes,
+            )
+            result = None
     except AmazonApiError as e:
         logger.error("Failed to create Amazon listing for %s: %s", body.auction_id, e)
         raise HTTPException(502, f"SP-API error: {e}") from e
 
-    import json as _json
 
     item.amazon_asin = body.asin
     item.amazon_sku = sku
@@ -333,7 +260,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     item.amazon_condition_note = body.condition_note
     if body.image_urls:
         # Save S3-proxied URLs if available, otherwise original URLs
-        item.amazon_image_urls = _json.dumps(_s3_image_urls or body.image_urls)
+        s3_urls = result.s3_image_urls if result else None
+        item.amazon_image_urls = json.dumps(s3_urls or body.image_urls)
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""  # チェックリストリセット
@@ -517,116 +445,35 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
         pattern = get_pattern_by_key("2_3_days")
     lead_time = pattern.lead_time_days
 
-    _s3_relist_urls = None  # Track S3-proxied URLs for DB persistence
+    # condition_note: bodyで上書き可能（コンディション変更時にテンプレート差し替え）
+    condition_note = body.get("condition_note") or item.amazon_condition_note or ""
+
+    # Resolve image URLs: body → stored DB → empty
+    image_urls = body.get("image_urls", [])
+    if not image_urls and item.amazon_image_urls:
+        try:
+            image_urls = json.loads(item.amazon_image_urls)
+        except (ValueError, TypeError):
+            image_urls = []
 
     try:
-        attributes = {
-            "condition_type": [{"value": condition}],
-            "purchasable_offer": [{
-                "marketplace_id": settings.sp_api_marketplace,
-                "currency": "JPY",
-                "our_price": [{"schedule": [{"value_with_tax": price}]}],
-            }],
-            "fulfillment_availability": [
-                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
-            ],
-            "merchant_suggested_asin": [{
-                "value": item.amazon_asin,
-                "marketplace_id": settings.sp_api_marketplace,
-            }],
-            "merchant_shipping_group": [{"value": pattern.template_name}],
-            "lead_time_to_ship_max_days": [{"value": lead_time}],
-        }
-
-        # condition_note: bodyで上書き可能（コンディション変更時にテンプレート差し替え）
-        condition_note = body.get("condition_note") or item.amazon_condition_note
-        if condition_note:
-            attributes["condition_note"] = [
-                {"value": condition_note, "language_tag": "ja_JP"}
-            ]
-
         product_type = await client.get_product_type(item.amazon_asin)
-
-        try:
-            await client.create_listing(
-                settings.sp_api_seller_id, sku, product_type, attributes,
-                offer_only=True,
-            )
-        except AmazonApiError as e:
-            if "INVALID" in str(e):
-                logger.info("Relist INVALID with lead_time for %s, retrying without", sku)
-                attributes.pop("lead_time_to_ship_max_days", None)
-                await client.create_listing(
-                    settings.sp_api_seller_id, sku, product_type, attributes,
-                    offer_only=True,
-                )
-                try:
-                    await client.patch_listing_lead_time(
-                        settings.sp_api_seller_id, sku, lead_time,
-                    )
-                except AmazonApiError:
-                    logger.info("lead_time PATCH also failed for %s", sku)
-            else:
-                raise
-
-        # Wait for PUT to be processed before sending PATCHes
-        import asyncio
-        await asyncio.sleep(3)
-
-        # Offer images: PATCH after listing creation
-        # Use body images, or fall back to previously saved images
-        import json as _json
-        image_urls = body.get("image_urls", [])
-        if not image_urls and item.amazon_image_urls:
-            try:
-                image_urls = _json.loads(item.amazon_image_urls)
-            except (ValueError, TypeError):
-                image_urls = []
-        if image_urls:
-            # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
-            from ..amazon.image_proxy import upload_images_to_s3
-
-            image_urls = await upload_images_to_s3(image_urls, item.auction_id)
-            _s3_relist_urls = image_urls
-            try:
-                await client.patch_offer_images(
-                    settings.sp_api_seller_id, sku, image_urls,
-                )
-            except AmazonApiError:
-                logger.warning("Offer image PATCH failed for relist %s (non-critical)", sku)
-
-        # PATCH price + quantity to trigger listing activation
-        try:
-            await client.patch_listing_price(
-                settings.sp_api_seller_id, sku, price,
-            )
-            logger.info("Activation price PATCH sent for relist %s (¥%d)", sku, price)
-        except AmazonApiError:
-            logger.warning("Activation price PATCH failed for relist %s", sku)
-        try:
-            await client.patch_listing_quantity(
-                settings.sp_api_seller_id, sku, 1,
-            )
-            logger.info("Activation quantity PATCH sent for relist %s", sku)
-        except AmazonApiError:
-            logger.warning("Activation quantity PATCH failed for relist %s", sku)
-
-        # Feeds API: セラーセントラルの在庫管理システムに直接反映
-        try:
-            await client.submit_price_feed(
-                settings.sp_api_seller_id, sku, price,
-            )
-            logger.info("Price feed submitted for relist %s (¥%d)", sku, price)
-        except AmazonApiError:
-            logger.warning("Price feed failed for relist %s (non-critical)", sku)
-        try:
-            await client.submit_inventory_feed(
-                settings.sp_api_seller_id, sku, 1, lead_time,
-            )
-            logger.info("Inventory feed submitted for relist %s", sku)
-        except AmazonApiError:
-            logger.warning("Inventory feed failed for relist %s (non-critical)", sku)
-
+        result = await submit_to_amazon(
+            client,
+            ListingParams(
+                seller_id=settings.sp_api_seller_id,
+                sku=sku,
+                asin=item.amazon_asin,
+                price=price,
+                condition=condition,
+                lead_time=lead_time,
+                shipping_template=pattern.template_name,
+                product_type=product_type,
+                condition_note=condition_note,
+                image_urls=image_urls,
+                auction_id=item.auction_id,
+            ),
+        )
     except AmazonApiError as e:
         logger.error("Failed to relist Amazon for %s: %s", auction_id, e)
         raise HTTPException(502, f"SP-API error: {e}") from e
@@ -639,10 +486,10 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     if condition_note:
         item.amazon_condition_note = condition_note
     # Save S3-proxied image URLs for future relist persistence
-    if _s3_relist_urls:
-        item.amazon_image_urls = _json.dumps(_s3_relist_urls)
+    if result.s3_image_urls:
+        item.amazon_image_urls = json.dumps(result.s3_image_urls)
     elif body.get("image_urls"):
-        item.amazon_image_urls = _json.dumps(body["image_urls"])
+        item.amazon_image_urls = json.dumps(body["image_urls"])
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
     item.seller_central_checklist = ""

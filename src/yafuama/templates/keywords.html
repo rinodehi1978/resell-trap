@@ -146,7 +146,7 @@
           </div>
           {% endif %}
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs">
-            <span class="text-gray-500">仕入: <span class="font-semibold">&yen;{{ "{:,}".format(alert.yahoo_price) }}</span>{% if alert.yahoo_shipping %}<span class="text-gray-400"> +送料¥{{ "{:,}".format(alert.yahoo_shipping) }}</span>{% endif %}</span>
+            <span class="text-gray-500">仕入: <span class="font-semibold">&yen;{{ "{:,}".format(alert.yahoo_price) }}</span>{% if alert.yahoo_shipping %}<span class="text-gray-400"> +送料¥{{ "{:,}".format(alert.yahoo_shipping) }}</span>{% elif alert.yahoo_shipping == 0 %}<span class="text-green-600"> 送料無料</span>{% endif %}</span>
             <span class="text-gray-400">&rarr;</span>
             <span class="text-gray-500">販売: <span class="font-semibold text-purple-700">&yen;{{ "{:,}".format(alert.sell_price) }}</span>
               <span class="text-[10px] text-gray-400">(手数料{{ alert.amazon_fee_pct }}% / 転送¥{{ "{:,}".format(alert.forwarding_cost) }} / 利用料¥100)</span>
@@ -730,13 +730,21 @@ async function openListingModal(alertId, auctionId, asin, title, yahooPrice, yah
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-asin').textContent = asin;
   document.getElementById('modal-yahoo-price').textContent = '¥' + yahooPrice.toLocaleString();
-  document.getElementById('modal-shipping').textContent = yahooShipping > 0 ? '¥' + yahooShipping.toLocaleString() : '不明';
+  const shippingEl = document.getElementById('modal-shipping');
+  if (yahooShipping === 0) {
+    shippingEl.textContent = '送料無料';
+    shippingEl.className = 'font-bold text-green-600';
+  } else if (yahooShipping > 0) {
+    shippingEl.textContent = '¥' + yahooShipping.toLocaleString();
+    shippingEl.className = 'font-bold text-orange-500';
+  } else {
+    shippingEl.textContent = '不明';
+    shippingEl.className = 'font-bold text-orange-500';
+  }
   document.getElementById('modal-sell-price').textContent = '¥' + sellPrice.toLocaleString();
   document.getElementById('modal-list-price').value = sellPrice;
-  const totalCost = yahooPrice + (yahooShipping || 0);
-  document.getElementById('modal-total-cost').textContent = yahooShipping > 0
-    ? '小計 ¥' + totalCost.toLocaleString()
-    : '※送料は地域によって異なります';
+  const totalCost = yahooPrice + yahooShipping;
+  document.getElementById('modal-total-cost').textContent = '小計 ¥' + totalCost.toLocaleString();
 
   // Display Amazon cost breakdown
   document.getElementById('modal-forwarding-cost').textContent = '¥' + (forwardingCost || 0).toLocaleString();

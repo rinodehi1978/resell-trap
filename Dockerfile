@@ -13,7 +13,7 @@ COPY alembic.ini ./
 COPY alembic/ alembic/
 
 # Install Python deps + app
-RUN pip install --no-cache-dir . && pip install --no-cache-dir gunicorn
+RUN pip install --no-cache-dir .
 
 # Create non-root user and data directory
 RUN useradd -r -s /bin/false appuser && mkdir -p /data && chown appuser:appuser /data
@@ -26,7 +26,4 @@ ENV HOST=0.0.0.0
 
 EXPOSE ${PORT}
 
-CMD uvicorn yafuama.main:app \
-    --host ${HOST} \
-    --port ${PORT} \
-    --timeout-keep-alive 120
+CMD ["sh", "-c", "uvicorn yafuama.main:app --host ${HOST} --port ${PORT} --timeout-keep-alive 120"]

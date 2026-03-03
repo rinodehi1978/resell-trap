@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .api.router import api_router
 from .web.views import router as web_router
@@ -16,10 +18,21 @@ from .notifier.log_notifier import LogNotifier
 from .notifier.webhook import WebhookNotifier
 from .scraper.yahoo import YahooAuctionScraper
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+_log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+_log_fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+logging.basicConfig(level=_log_level, format=_log_fmt)
+# Rotating file handler: max 5MB × 3 files
+# Use the same directory as the database (writable in Docker /data/)
+import os as _os
+_log_dir = _os.path.dirname(settings.database_url.replace("sqlite:///", "")) or "."
+_log_path = _os.path.join(_log_dir, "yafuama.log")
+try:
+    _file_handler = RotatingFileHandler(_log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+    _file_handler.setFormatter(logging.Formatter(_log_fmt))
+    _file_handler.setLevel(_log_level)
+    logging.getLogger().addHandler(_file_handler)
+except PermissionError:
+    pass  # Docker: /app is read-only, skip file logging
 logger = logging.getLogger(__name__)
 
 # Shared state accessible by API endpoints
@@ -140,6 +153,18 @@ async def lifespan(app: FastAPI):
     if "keepa" in app_state:
         await app_state["keepa"].close()
     app_state.clear()
+
+    # SQLite WAL cleanup (shrink .db-wal file)
+    if settings.database_url.startswith("sqlite"):
+        try:
+            import sqlalchemy as sa
+            from .database import engine
+            with engine.connect() as conn:
+                conn.execute(sa.text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            logger.info("SQLite WAL checkpoint completed")
+        except Exception:
+            pass
+
     logger.info("ヤフアマ stopped")
 
 
@@ -149,6 +174,22 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Prevent mobile browsers from serving stale HTML."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        ct = response.headers.get("content-type", "")
+        if "text/html" in ct:
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+
+app.add_middleware(NoCacheMiddleware)
 if settings.api_key:
     from .auth import ApiKeyMiddleware
     app.add_middleware(ApiKeyMiddleware)

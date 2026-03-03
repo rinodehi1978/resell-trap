@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -229,6 +230,7 @@ async def list_from_deal(
         "shipping_pattern": "2_3_days"
     }
     """
+    from ..amazon.listing import ListingParams, submit_to_amazon
     from ..amazon.pricing import calculate_amazon_price, generate_sku
     from ..amazon.shipping import get_pattern_by_key
     from ..config import settings
@@ -314,112 +316,25 @@ async def list_from_deal(
             ) or "ブランド承認またはカテゴリ承認が必要です"
             raise HTTPException(403, f"出品制限: {reasons}")
 
-        attributes = {
-            "condition_type": [{"value": condition}],
-            "purchasable_offer": [{
-                "marketplace_id": settings.sp_api_marketplace,
-                "currency": "JPY",
-                "our_price": [{"schedule": [{"value_with_tax": amazon_price}]}],
-            }],
-            "fulfillment_availability": [
-                {"fulfillment_channel_code": "DEFAULT", "quantity": 1}
-            ],
-            # Offer on existing ASIN: use LISTING_OFFER_ONLY mode
-            "merchant_suggested_asin": [{
-                "value": alert.amazon_asin,
-                "marketplace_id": settings.sp_api_marketplace,
-            }],
-            "merchant_shipping_group": [{"value": pattern.template_name}],
-            "lead_time_to_ship_max_days": [{"value": lead_time}],
-        }
-
-        # 提供条件に関する注記（出品情報ページ、中古コンディション説明）
-        condition_note = body.get("condition_note", "").strip()
-        if condition_note:
-            attributes["condition_note"] = [
-                {"value": condition_note, "language_tag": "ja_JP"}
-            ]
-
-        # Get correct productType from Catalog API
         product_type = await sp_client.get_product_type(alert.amazon_asin)
+        condition_note = body.get("condition_note", "").strip()
 
-        # Try with lead_time; if INVALID, retry without it
-        try:
-            await sp_client.create_listing(
-                settings.sp_api_seller_id, sku, product_type, attributes,
-                offer_only=True,
-            )
-        except AmazonApiError as e:
-            if "INVALID" in str(e):
-                logger.info("Listing INVALID with lead_time for %s, retrying without", sku)
-                attributes.pop("lead_time_to_ship_max_days", None)
-                await sp_client.create_listing(
-                    settings.sp_api_seller_id, sku, product_type, attributes,
-                    offer_only=True,
-                )
-                # Fallback: try PATCH for lead_time
-                try:
-                    await sp_client.patch_listing_lead_time(
-                        settings.sp_api_seller_id, sku, lead_time,
-                    )
-                except AmazonApiError:
-                    logger.info("lead_time PATCH also failed for %s", sku)
-            else:
-                raise
-
-        # Wait for PUT to be processed before sending PATCHes
-        import asyncio
-        await asyncio.sleep(3)
-
-        # Offer images: send separately via PATCH after listing is created
-        # to prevent image issues from causing "不完全" status
-        image_urls = body.get("image_urls", [])
-        if image_urls:
-            # S3プロキシ: Yahoo CDN画像をS3にアップロードしてからAmazonに送信
-            from ..amazon.image_proxy import upload_images_to_s3
-
-            image_urls = await upload_images_to_s3(image_urls, alert.yahoo_auction_id)
-            try:
-                await sp_client.patch_offer_images(
-                    settings.sp_api_seller_id, sku, image_urls,
-                )
-            except AmazonApiError:
-                logger.warning("Offer image PATCH failed for %s (non-critical)", sku)
-
-        # PATCH price + quantity to trigger listing activation
-        # (PUT alone creates the record but doesn't activate the offer;
-        #  some product types need explicit quantity PATCH to become BUYABLE)
-        try:
-            await sp_client.patch_listing_price(
-                settings.sp_api_seller_id, sku, amazon_price,
-            )
-            logger.info("Activation price PATCH sent for %s (¥%d)", sku, amazon_price)
-        except AmazonApiError:
-            logger.warning("Activation price PATCH failed for %s", sku)
-        try:
-            await sp_client.patch_listing_quantity(
-                settings.sp_api_seller_id, sku, 1,
-            )
-            logger.info("Activation quantity PATCH sent for %s", sku)
-        except AmazonApiError:
-            logger.warning("Activation quantity PATCH failed for %s", sku)
-
-        # Feeds API: セラーセントラルの在庫管理システムに直接反映
-        # (Listings Items API PATCHだけではセラーセントラルに反映されない問題の対策)
-        try:
-            await sp_client.submit_price_feed(
-                settings.sp_api_seller_id, sku, amazon_price,
-            )
-            logger.info("Price feed submitted for %s (¥%d)", sku, amazon_price)
-        except AmazonApiError:
-            logger.warning("Price feed failed for %s (non-critical)", sku)
-        try:
-            await sp_client.submit_inventory_feed(
-                settings.sp_api_seller_id, sku, 1, lead_time,
-            )
-            logger.info("Inventory feed submitted for %s", sku)
-        except AmazonApiError:
-            logger.warning("Inventory feed failed for %s (non-critical)", sku)
+        result = await submit_to_amazon(
+            sp_client,
+            ListingParams(
+                seller_id=settings.sp_api_seller_id,
+                sku=sku,
+                asin=alert.amazon_asin,
+                price=amazon_price,
+                condition=condition,
+                lead_time=lead_time,
+                shipping_template=pattern.template_name,
+                product_type=product_type,
+                condition_note=condition_note,
+                image_urls=body.get("image_urls", []),
+                auction_id=alert.yahoo_auction_id,
+            ),
+        )
 
     except AmazonApiError as e:
         raise HTTPException(502, f"SP-API error: {e}") from e
@@ -438,6 +353,10 @@ async def list_from_deal(
     item.amazon_lead_time_days = lead_time
     item.amazon_shipping_pattern = shipping_pattern_key
     item.amazon_condition_note = body.get("condition_note", "")
+    if result.s3_image_urls:
+        item.amazon_image_urls = json.dumps(result.s3_image_urls)
+    elif body.get("image_urls"):
+        item.amazon_image_urls = json.dumps(body["image_urls"])
     item.is_monitoring_active = True
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)

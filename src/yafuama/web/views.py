@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -25,13 +27,11 @@ templates.env.auto_reload = True
 
 def _checklist_complete(item: MonitoredItem) -> bool | None:
     """Return True if all checklist items checked, False if incomplete, None if N/A."""
-    import json as _json
-
     if item.amazon_listing_status != "active":
         return None
     try:
-        cl = _json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
-    except (_json.JSONDecodeError, TypeError):
+        cl = json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
+    except (json.JSONDecodeError, TypeError):
         cl = {}
     if not cl:
         return False
@@ -107,7 +107,6 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     }
 
     # Sales summary (this month's Amazon orders)
-    from sqlalchemy import func
     month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_orders = (
         db.query(
@@ -155,8 +154,6 @@ def items_page(
 
 @router.get("/items/{auction_id}", response_class=HTMLResponse)
 def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)):
-    import json as _json
-
     item = db.query(MonitoredItem).filter(MonitoredItem.auction_id == auction_id).first()
     if not item:
         return HTMLResponse("<h1>Not Found</h1>", status_code=404)
@@ -177,8 +174,8 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
 
     # Parse checklist JSON
     try:
-        checklist = _json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
-    except (_json.JSONDecodeError, TypeError):
+        checklist = json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
+    except (json.JSONDecodeError, TypeError):
         checklist = {}
     # Ensure all keys present
     for k in ("lead_time", "images", "condition"):
@@ -190,7 +187,7 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
         "item": item,
         "history": history,
         "notifications": notifications,
-        "checklist_json": _json.dumps(checklist),
+        "checklist_json": json.dumps(checklist),
     })
 
 
@@ -262,7 +259,6 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
     delisted_ids = [m.id for m in monitored_items if m.amazon_listing_status == "delisted"]
     relist_skip_map: dict[int, str] = {}
     if delisted_ids:
-        from sqlalchemy import func
         skip_subq = (
             db.query(
                 StatusHistory.item_id,

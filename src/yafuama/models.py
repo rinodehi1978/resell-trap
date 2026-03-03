@@ -30,11 +30,11 @@ class MonitoredItem(Base):
     end_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     bid_count: Mapped[int] = mapped_column(Integer, default=0)
 
-    status: Mapped[str] = mapped_column(Text, default="active")  # active / ended_no_winner / ended_sold
+    status: Mapped[str] = mapped_column(Text, default="active", index=True)  # active / ended_no_winner / ended_sold
 
     check_interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
     auto_adjust_interval: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_monitoring_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_monitoring_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -43,9 +43,9 @@ class MonitoredItem(Base):
 
     # Amazon integration
     amazon_asin: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
-    amazon_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amazon_sku: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     amazon_condition: Mapped[str] = mapped_column(Text, default="used_very_good")  # used_like_new / used_very_good / used_good / used_acceptable
-    amazon_listing_status: Mapped[str | None] = mapped_column(Text, nullable=True)  # active / inactive / error
+    amazon_listing_status: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)  # active / inactive / error
     amazon_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     estimated_win_price: Mapped[int] = mapped_column(Integer, default=0)
     shipping_cost: Mapped[int] = mapped_column(Integer, default=0)  # Yahoo送料
@@ -71,7 +71,7 @@ class StatusHistory(Base):
     __tablename__ = "status_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("monitored_items.id"))
+    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("monitored_items.id"), index=True)
     auction_id: Mapped[str] = mapped_column(Text)
     change_type: Mapped[str] = mapped_column(Text)  # status_change / price_change / bid_change / initial
 
@@ -91,7 +91,7 @@ class NotificationLog(Base):
     __tablename__ = "notification_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("monitored_items.id"))
+    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("monitored_items.id"), index=True)
     channel: Mapped[str] = mapped_column(Text)  # log / webhook
     event_type: Mapped[str] = mapped_column(Text)  # ended / sold / price_change / error
     message: Mapped[str] = mapped_column(Text, default="")
@@ -136,9 +136,9 @@ class DealAlert(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    keyword_id: Mapped[int] = mapped_column(Integer, ForeignKey("watched_keywords.id"))
+    keyword_id: Mapped[int] = mapped_column(Integer, ForeignKey("watched_keywords.id"), index=True)
     yahoo_auction_id: Mapped[str] = mapped_column(Text, index=True)
-    amazon_asin: Mapped[str] = mapped_column(Text)
+    amazon_asin: Mapped[str] = mapped_column(Text, index=True)
     yahoo_title: Mapped[str] = mapped_column(Text, default="")
     yahoo_url: Mapped[str] = mapped_column(Text, default="")
     yahoo_image_url: Mapped[str] = mapped_column(Text, default="")
@@ -153,7 +153,7 @@ class DealAlert(Base):
     forwarding_cost: Mapped[int] = mapped_column(Integer, default=0)
     notified_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Rejection feedback
-    status: Mapped[str] = mapped_column(Text, default="active")  # active / rejected / listed / expired
+    status: Mapped[str] = mapped_column(Text, default="active", index=True)  # active / rejected / listed / expired
     rejection_reason: Mapped[str] = mapped_column(Text, default="")
     # "wrong_product" | "accessory" | "model_variant" | "bad_price" | "other"
     rejection_note: Mapped[str] = mapped_column(Text, default="")

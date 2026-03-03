@@ -403,8 +403,11 @@ def score_deal(
       gross_profit = sell_price - total_cost - amazon_fee
       gross_margin = gross_profit / sell_price * 100
 
-    yahoo_shipping=None means 着払い (buyer pays). In this case, the size-based
-    forwarding cost is used as shipping estimate.
+    yahoo_shipping handling:
+      - 0: 送料無料 (free shipping)
+      - int > 0: 送料確定 (known shipping amount)
+      - None: 着払い/送料不明 → actual_forwarding を推定値として使用
+        (Yahoo出品者→転送会社の送料を、転送会社→FBAの送料で推定)
 
     Returns None if:
       - No usable price data from Keepa
@@ -443,7 +446,8 @@ def score_deal(
         # No size data → use fallback
         actual_forwarding = forwarding_cost
 
-    # 着払い（yahoo_shipping=None）→ サイズベース転送料で推定
+    # 着払い/送料不明（yahoo_shipping=None）→ 転送会社の送料で推定
+    # ヤフオク出品者→転送会社 の送料を、転送会社→FBA の送料で見積もる
     if yahoo_shipping is None:
         yahoo_shipping = actual_forwarding
 

@@ -22,9 +22,9 @@ class BaseNotifier(ABC):
         if change.change_type == "status_change":
             lines.append(f"Status: {change.old_status} → {change.new_status}")
         elif change.change_type == "price_change":
-            lines.append(f"Price: ¥{change.old_price:,} → ¥{change.new_price:,}")
+            lines.append(f"Price: ¥{change.old_price or 0:,} → ¥{change.new_price or 0:,}")
         elif change.change_type == "bid_change":
-            lines.append(f"Bids: {change.old_bid_count} → {change.new_bid_count}")
+            lines.append(f"Bids: {change.old_bid_count or 0} → {change.new_bid_count or 0}")
 
         lines.append(f"URL: {item.url}")
         return "\n".join(lines)

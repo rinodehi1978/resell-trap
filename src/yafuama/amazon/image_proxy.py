@@ -61,7 +61,7 @@ async def upload_images_to_s3(
         return []
 
     s3_urls: list[str] = []
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     async with httpx.AsyncClient(
         timeout=15.0,
