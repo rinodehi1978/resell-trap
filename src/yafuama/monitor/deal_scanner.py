@@ -501,12 +501,12 @@ class DealScanner:
                     logger.exception("Phase 1 (Product Finder) error: %s", e)
                     db.rollback()
 
-            # Phase 2: Manual keywords only
+            # Phase 2: Manual + AI-generated keywords
             keywords = (
                 db.query(WatchedKeyword)
                 .filter(
                     WatchedKeyword.is_active == True,  # noqa: E712
-                    WatchedKeyword.source == "manual",
+                    WatchedKeyword.source.in_(["manual", "ai_demand", "ai_series"]),
                 )
                 .order_by(
                     WatchedKeyword.last_scanned_at.is_(None).desc(),
@@ -533,7 +533,7 @@ class DealScanner:
                     break
 
                 # Skip dormant keywords
-                dormant_threshold = 20  # manual keywords only
+                dormant_threshold = 20
                 if kw.scans_since_last_deal >= dormant_threshold and kw.total_scans >= dormant_threshold:
                     kw.last_scanned_at = datetime.now(timezone.utc)
                     kw.total_scans += 1
@@ -561,7 +561,7 @@ class DealScanner:
             db.expire_all()
 
             logger.info(
-                "Scan cycle complete: PF=%d deals, Manual=%d/%d keywords scanned",
+                "Scan cycle complete: PF=%d deals, Keywords=%d/%d scanned",
                 pf_deals, scanned, len(keywords),
             )
             db.commit()
