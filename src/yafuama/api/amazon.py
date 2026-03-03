@@ -434,13 +434,21 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     # Unique SKU to avoid reuse issues after Seller Central deletion
     suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
     sku = f"{generate_sku(auction_id)}-R{suffix}"
-    price = item.amazon_price or calculate_amazon_price(
+
+    # body で仕入れ価格・送料が更新された場合、itemにも反映
+    if body.get("estimated_win_price"):
+        item.estimated_win_price = body["estimated_win_price"]
+    if "shipping_cost" in body:
+        item.shipping_cost = body["shipping_cost"]
+
+    price = body.get("price") or item.amazon_price or calculate_amazon_price(
         item.estimated_win_price, item.shipping_cost, margin_pct=item.amazon_margin_pct,
     )
     if price <= 0:
         raise HTTPException(400, "Price is zero — check estimated_win_price")
 
-    pattern = get_pattern_by_key(item.amazon_shipping_pattern or "2_3_days")
+    shipping_pattern_key = body.get("shipping_pattern") or item.amazon_shipping_pattern or "2_3_days"
+    pattern = get_pattern_by_key(shipping_pattern_key)
     if not pattern:
         pattern = get_pattern_by_key("2_3_days")
     lead_time = pattern.lead_time_days
@@ -492,6 +500,7 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     item.amazon_listing_status = "active"
     item.amazon_price = price
     item.amazon_lead_time_days = lead_time
+    item.amazon_shipping_pattern = shipping_pattern_key
     if condition_note:
         item.amazon_condition_note = condition_note
     # Save S3-proxied image URLs for future relist persistence

@@ -330,30 +330,10 @@
         Amazon出品のみ取り下げ
       </button>
       {% elif item.amazon_asin and item.amazon_listing_status == 'delisted' %}
-      <div class="space-y-2">
-        <label class="block text-xs text-gray-500">コンディション</label>
-        <select id="relist-condition" class="w-full px-2 py-1.5 text-sm border rounded-md" onchange="onRelistConditionChange()">
-          {% for val, label in [("used_like_new", "ほぼ新品"), ("used_very_good", "非常に良い"), ("used_good", "良い"), ("used_acceptable", "可")] %}
-          <option value="{{ val }}" {% if item.amazon_condition == val %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        <label class="block text-xs text-gray-500">コンディションノート</label>
-        <textarea id="relist-condition-note" rows="3"
-                  class="w-full px-2 py-1.5 text-sm border rounded-md"
-                  placeholder="コンディション説明...">{{ item.amazon_condition_note or '' }}</textarea>
-        <!-- Image selection for relist -->
-        <label class="block text-xs text-gray-500">画像選択</label>
-        <div id="relist-images-container">
-          <div id="relist-images-loading" class="text-xs text-gray-400 py-2 text-center">画像を読み込み中...</div>
-          <div id="relist-images-grid" class="grid grid-cols-3 gap-1.5 hidden"></div>
-          <div id="relist-images-empty" class="text-xs text-gray-400 py-2 text-center hidden">画像が見つかりません</div>
-        </div>
-        <div class="text-[10px] text-gray-400">最大6枚選択（1枚目がメイン画像）</div>
-        <button onclick="relistAmazon()" id="relist-btn"
-                class="w-full px-3 py-2 text-sm bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-md text-center">
-          Amazonに再出品
-        </button>
-      </div>
+      <button onclick="openRelistModal()" id="relist-open-btn"
+              class="w-full px-3 py-2 text-sm bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-md text-center font-medium">
+        Amazonに再出品
+      </button>
       {% endif %}
       <button onclick="deleteItem()" id="delete-item-btn"
               class="w-full px-3 py-2 text-sm bg-red-50 text-red-600 hover:bg-red-100 rounded-md text-center">
@@ -397,6 +377,133 @@
   </div>
 </div>
 
+{% if item.amazon_asin and item.amazon_listing_status == 'delisted' %}
+<!-- Relist Confirmation Modal -->
+<div id="relist-modal" class="fixed inset-0 z-50 hidden">
+  <div class="absolute inset-0 bg-black/50" onclick="closeRelistModal()"></div>
+  <div class="absolute inset-0 flex items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg relative my-4" onclick="event.stopPropagation()">
+      <!-- Header -->
+      <div class="px-5 py-4 border-b">
+        <h3 class="text-base font-bold text-gray-900">Amazon再出品確認</h3>
+        <p class="text-xs text-gray-500 mt-0.5 truncate">{{ item.title }}</p>
+      </div>
+
+      <!-- Content -->
+      <div class="px-5 py-4 space-y-4 max-h-[80vh] overflow-y-auto">
+
+        <!-- Price Breakdown -->
+        <div class="bg-gray-50 rounded-lg p-3 space-y-2">
+          <div>
+            <div class="text-[10px] font-medium text-gray-500 mb-1">仕入れ（ヤフオク最新価格）</div>
+            <div class="flex items-center gap-2 text-xs">
+              <span class="text-gray-600">即決/現在価格</span>
+              <span class="font-bold text-red-600" id="rm-yahoo-price">読込中...</span>
+              <span class="text-gray-400">+</span>
+              <span class="text-gray-600">送料</span>
+              <input type="number" id="rm-shipping" value="{{ item.shipping_cost }}" min="0"
+                     class="w-16 px-1 py-0.5 text-xs border rounded text-center font-bold text-orange-500"
+                     oninput="rmCalcProfit()">
+            </div>
+            <div id="rm-yahoo-changed" class="text-[10px] text-orange-600 mt-0.5 hidden"></div>
+          </div>
+
+          <div>
+            <div class="text-[10px] font-medium text-gray-500 mb-1">Amazon経費</div>
+            <div class="flex items-center gap-3 text-xs text-gray-600">
+              <span>転送: <span class="font-semibold">¥{{ "{:,}".format(item.forwarding_cost) }}</span></span>
+              <span>利用料: <span class="font-semibold">¥100</span></span>
+              <span>手数料: <span class="font-semibold">{{ item.amazon_fee_pct }}%</span></span>
+            </div>
+          </div>
+
+          <div class="border-t pt-2">
+            <div class="flex items-center gap-3">
+              <div>
+                <div class="text-[10px] text-gray-500">前回出品価格</div>
+                <div class="text-sm text-gray-400">¥{{ "{:,}".format(item.amazon_price or 0) }}</div>
+              </div>
+              <span class="text-gray-400 text-lg">&rarr;</span>
+              <div>
+                <div class="text-[10px] text-gray-500">出品価格</div>
+                <input type="number" id="rm-price" value="{{ item.amazon_price or 0 }}" min="1"
+                       class="w-24 text-sm font-bold text-green-700 text-center border rounded px-1 py-0.5"
+                       oninput="rmCalcProfit()">
+              </div>
+              <div class="flex-1 text-right" id="rm-profit-display"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Condition -->
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">コンディション</label>
+          <div class="grid grid-cols-2 gap-2" id="rm-condition-grid">
+            {% for val, label, en in [("used_like_new", "ほぼ新品", "Like New"), ("used_very_good", "非常に良い", "Very Good"), ("used_good", "良い", "Good"), ("used_acceptable", "可", "Acceptable")] %}
+            <label class="flex items-center gap-2 p-2.5 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors
+              {% if item.amazon_condition == val %}border-blue-500 bg-blue-50{% endif %}">
+              <input type="radio" name="rm-condition" value="{{ val }}" {% if item.amazon_condition == val %}checked{% endif %} class="text-blue-600">
+              <div><div class="text-sm font-medium">{{ label }}</div><div class="text-[10px] text-gray-400">{{ en }}</div></div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Shipping Pattern -->
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">発送までの日数</label>
+          <div class="grid grid-cols-3 gap-2">
+            {% for val, label, lt in [("1_2_days", "1〜2日", "リードタイム4日"), ("2_3_days", "2〜3日", "リードタイム6日"), ("3_7_days", "3〜7日", "リードタイム9日")] %}
+            <label class="flex items-center gap-2 p-2.5 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors
+              {% if (item.amazon_shipping_pattern or '2_3_days') == val %}border-blue-500 bg-blue-50{% endif %}">
+              <input type="radio" name="rm-shipping-pattern" value="{{ val }}" {% if (item.amazon_shipping_pattern or '2_3_days') == val %}checked{% endif %} class="text-blue-600">
+              <div><div class="text-sm font-medium">{{ label }}</div><div class="text-[10px] text-gray-400">{{ lt }}</div></div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Images -->
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">商品画像（Yahoo画像から選択）</label>
+          <div id="rm-images-container">
+            <div id="rm-images-loading" class="text-xs text-gray-400 py-3 text-center">画像を読み込み中...</div>
+            <div id="rm-images-grid" class="grid grid-cols-4 gap-2 hidden"></div>
+            <div id="rm-images-empty" class="text-xs text-gray-400 py-2 text-center hidden">画像が見つかりません</div>
+          </div>
+          <div class="text-[10px] text-gray-400 mt-1">最大9枚まで選択可能（1枚目がメイン画像）</div>
+        </div>
+
+        <!-- Condition Note -->
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">商品説明</label>
+          <textarea id="rm-condition-note" rows="5"
+                    class="w-full text-sm border rounded-lg px-3 py-2 text-gray-800 focus:ring-1 focus:ring-blue-400 focus:border-blue-400"
+                    placeholder="コンディション説明文...">{{ item.amazon_condition_note or '' }}</textarea>
+        </div>
+
+        <!-- Links -->
+        <div class="flex gap-3 text-xs">
+          <a href="{{ item.url }}" target="_blank" class="text-red-600 hover:underline">Yahoo出品を確認</a>
+          <a href="https://amazon.co.jp/dp/{{ item.amazon_asin }}" target="_blank" class="text-orange-600 hover:underline">Amazon商品ページ</a>
+        </div>
+
+        <div id="rm-msg" class="text-xs"></div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-5 py-3 border-t bg-gray-50 rounded-b-xl flex items-center justify-between">
+        <button onclick="closeRelistModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">キャンセル</button>
+        <button onclick="submitRelist()" id="rm-submit-btn"
+                class="px-6 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700">
+          Amazonに再出品する
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <script>
 const auctionId = '{{ item.auction_id }}';
 const initialChecklist = {{ checklist_json|safe }};
@@ -431,64 +538,78 @@ function checklistPanel() {
   };
 }
 
-let _relistTemplateCache = null;
+// --- Relist Confirmation Modal ---
+const _rmData = {
+  yahooPrice: {{ item.estimated_win_price or item.current_price }},
+  shippingCost: {{ item.shipping_cost }},
+  forwardingCost: {{ item.forwarding_cost }},
+  feePct: {{ item.amazon_fee_pct }},
+  templateCache: null,
+};
 
-async function _loadRelistTemplates() {
-  if (_relistTemplateCache) return;
+function _escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+async function openRelistModal() {
+  document.getElementById('relist-modal').classList.remove('hidden');
+  // Fetch fresh Yahoo price + images in parallel
+  _rmLoadImages();
+  _rmFetchYahooPrice();
+  _rmLoadTemplateIfEmpty();
+  rmCalcProfit();
+  // Highlight active radio buttons
+  _rmUpdateRadioHighlight('rm-condition-grid');
+}
+
+function closeRelistModal() {
+  document.getElementById('relist-modal').classList.add('hidden');
+}
+
+async function _rmFetchYahooPrice() {
+  const el = document.getElementById('rm-yahoo-price');
+  const changedEl = document.getElementById('rm-yahoo-changed');
   try {
-    const resp = await fetch('/api/templates');
-    if (resp.ok) _relistTemplateCache = await resp.json();
-    else _relistTemplateCache = {};
-  } catch (_) { _relistTemplateCache = {}; }
-}
-
-async function onRelistConditionChange() {
-  await _loadRelistTemplates();
-  const condition = document.getElementById('relist-condition').value;
-  const tpl = _relistTemplateCache[condition];
-  if (tpl && tpl.body) {
-    document.getElementById('relist-condition-note').value = tpl.body;
-  }
-}
-
-// Load template on page load for pre-selected condition
-(async () => {
-  const condSelect = document.getElementById('relist-condition');
-  if (condSelect && !document.getElementById('relist-condition-note').value.trim()) {
-    await _loadRelistTemplates();
-    const tpl = _relistTemplateCache?.[condSelect.value];
-    if (tpl && tpl.body) {
-      document.getElementById('relist-condition-note').value = tpl.body;
+    const resp = await fetch('/api/items/' + auctionId + '/refresh', {method: 'POST'});
+    if (!resp.ok) throw new Error('Failed');
+    const item = await resp.json();
+    const newPrice = item.buy_now_price || item.current_price;
+    el.textContent = '¥' + newPrice.toLocaleString();
+    if (newPrice !== _rmData.yahooPrice) {
+      changedEl.textContent = '※ 前回 ¥' + _rmData.yahooPrice.toLocaleString() + ' から変更あり';
+      changedEl.classList.remove('hidden');
+      _rmData.yahooPrice = newPrice;
     }
+    rmCalcProfit();
+  } catch (e) {
+    el.textContent = '¥' + _rmData.yahooPrice.toLocaleString();
   }
-})();
+}
 
-// --- Relist Image Gallery ---
-async function _loadRelistImages() {
-  const loading = document.getElementById('relist-images-loading');
-  const grid = document.getElementById('relist-images-grid');
-  const empty = document.getElementById('relist-images-empty');
-  if (!loading) return; // not in relist mode
+async function _rmLoadImages() {
+  const loading = document.getElementById('rm-images-loading');
+  const grid = document.getElementById('rm-images-grid');
+  const empty = document.getElementById('rm-images-empty');
+  loading.classList.remove('hidden');
+  grid.classList.add('hidden');
+  grid.innerHTML = '';
+  empty.classList.add('hidden');
 
   try {
     const resp = await fetch('/api/items/' + auctionId + '/images');
     if (!resp.ok) throw new Error('Failed');
     const data = await resp.json();
     const images = data.images || [];
-
     loading.classList.add('hidden');
-    if (images.length === 0) {
-      empty.classList.remove('hidden');
-      return;
-    }
+    if (images.length === 0) { empty.classList.remove('hidden'); return; }
 
     images.forEach((url, i) => {
       const label = document.createElement('label');
       label.className = 'relative cursor-pointer group';
-      const escaped = url.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      const escaped = _escHtml(url);
       label.innerHTML =
         '<input type="checkbox" ' + (i === 0 ? 'checked' : '') + ' data-url="' + escaped + '"' +
-        ' class="absolute top-1 left-1 z-10 rounded text-blue-600" onchange="_enforceRelistMax()">' +
+        ' class="absolute top-1 left-1 z-10 rounded text-blue-600" onchange="_rmEnforceMax()">' +
         '<img src="' + escaped + '" alt="Image ' + (i+1) + '"' +
         ' class="w-full aspect-square object-cover rounded border-2 ' + (i === 0 ? 'border-blue-500' : 'border-gray-200') + ' group-hover:border-blue-400 bg-gray-100"' +
         ' onerror="this.parentElement.style.display=\'none\'">' +
@@ -503,15 +624,15 @@ async function _loadRelistImages() {
   }
 }
 
-function _enforceRelistMax() {
-  const checkboxes = document.querySelectorAll('#relist-images-grid input[type="checkbox"]');
-  const checked = document.querySelectorAll('#relist-images-grid input[type="checkbox"]:checked');
-  if (checked.length >= 6) {
-    checkboxes.forEach(cb => { if (!cb.checked) cb.disabled = true; });
+function _rmEnforceMax() {
+  const cbs = document.querySelectorAll('#rm-images-grid input[type="checkbox"]');
+  const checked = document.querySelectorAll('#rm-images-grid input[type="checkbox"]:checked');
+  if (checked.length >= 9) {
+    cbs.forEach(cb => { if (!cb.checked) cb.disabled = true; });
   } else {
-    checkboxes.forEach(cb => { cb.disabled = false; });
+    cbs.forEach(cb => { cb.disabled = false; });
   }
-  checkboxes.forEach(cb => {
+  cbs.forEach(cb => {
     const img = cb.parentElement.querySelector('img');
     if (img) {
       img.classList.toggle('border-blue-500', cb.checked);
@@ -520,44 +641,134 @@ function _enforceRelistMax() {
   });
 }
 
-function _getSelectedRelistImages() {
-  const checked = document.querySelectorAll('#relist-images-grid input[type="checkbox"]:checked');
-  return Array.from(checked).map(cb => cb.dataset.url);
+function rmCalcProfit() {
+  const price = parseInt(document.getElementById('rm-price').value) || 0;
+  const shipping = parseInt(document.getElementById('rm-shipping').value) || 0;
+  const yahooPrice = _rmData.yahooPrice;
+  const fwd = _rmData.forwardingCost;
+  const feePct = _rmData.feePct;
+  const amazonFee = Math.round(price * feePct / 100);
+  const totalCost = yahooPrice + shipping + fwd + 100 + amazonFee;
+  const profit = price - totalCost;
+  const marginPct = price > 0 ? (profit / price * 100).toFixed(1) : 0;
+  const el = document.getElementById('rm-profit-display');
+  if (profit > 0) {
+    el.innerHTML = '<div class="text-[10px] text-gray-500">粗利</div><div class="text-lg font-bold text-green-700">¥' + profit.toLocaleString() + ' <span class="text-xs font-normal">(' + marginPct + '%)</span></div>';
+  } else {
+    el.innerHTML = '<div class="text-[10px] text-gray-500">粗利</div><div class="text-lg font-bold text-red-600">¥' + profit.toLocaleString() + ' <span class="text-xs font-normal">(' + marginPct + '%)</span></div>';
+  }
 }
 
-// Auto-load images on page load (only when relist UI is visible)
-_loadRelistImages();
+async function _rmLoadTemplateIfEmpty() {
+  const noteEl = document.getElementById('rm-condition-note');
+  if (noteEl.value.trim()) return;
+  if (!_rmData.templateCache) {
+    try {
+      const resp = await fetch('/api/templates');
+      if (resp.ok) _rmData.templateCache = await resp.json();
+      else _rmData.templateCache = {};
+    } catch (_) { _rmData.templateCache = {}; }
+  }
+  const condition = document.querySelector('input[name="rm-condition"]:checked')?.value;
+  const tpl = _rmData.templateCache[condition];
+  if (tpl && tpl.body) noteEl.value = tpl.body;
+}
 
-async function relistAmazon() {
-  const condition = document.getElementById('relist-condition').value;
-  const conditionNote = document.getElementById('relist-condition-note').value.trim();
-  const imageUrls = _getSelectedRelistImages();
-  const labels = {used_like_new:'ほぼ新品', used_very_good:'非常に良い', used_good:'良い', used_acceptable:'可'};
-  const imgMsg = imageUrls.length > 0 ? '（画像' + imageUrls.length + '枚）' : '（画像なし）';
-  if (!confirm('コンディション「' + labels[condition] + '」' + imgMsg + 'でAmazonに再出品しますか？')) return;
+function _rmUpdateRadioHighlight(gridId) {
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  grid.querySelectorAll('label').forEach(label => {
+    const radio = label.querySelector('input[type="radio"]');
+    if (radio && radio.checked) {
+      label.classList.add('border-blue-500', 'bg-blue-50');
+    } else {
+      label.classList.remove('border-blue-500', 'bg-blue-50');
+    }
+  });
+}
 
-  const btn = document.getElementById('relist-btn');
-  const msgEl = document.getElementById('delete-item-msg');
-  btn.disabled = true; btn.textContent = '再出品中...';
+// Condition change → update template + highlight
+document.querySelectorAll('input[name="rm-condition"]').forEach(r => {
+  r.addEventListener('change', async () => {
+    _rmUpdateRadioHighlight('rm-condition-grid');
+    if (!_rmData.templateCache) {
+      try {
+        const resp = await fetch('/api/templates');
+        if (resp.ok) _rmData.templateCache = await resp.json();
+        else _rmData.templateCache = {};
+      } catch (_) { _rmData.templateCache = {}; }
+    }
+    const tpl = _rmData.templateCache[r.value];
+    if (tpl && tpl.body) document.getElementById('rm-condition-note').value = tpl.body;
+  });
+});
+
+// Shipping pattern highlight
+document.querySelectorAll('input[name="rm-shipping-pattern"]').forEach(r => {
+  r.addEventListener('change', () => {
+    r.closest('.grid').querySelectorAll('label').forEach(label => {
+      const radio = label.querySelector('input[type="radio"]');
+      if (radio && radio.checked) label.classList.add('border-blue-500', 'bg-blue-50');
+      else label.classList.remove('border-blue-500', 'bg-blue-50');
+    });
+  });
+});
+
+// Close on Escape
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRelistModal(); });
+
+async function submitRelist() {
+  const btn = document.getElementById('rm-submit-btn');
+  const msgEl = document.getElementById('rm-msg');
+  const condition = document.querySelector('input[name="rm-condition"]:checked')?.value;
+  const price = parseInt(document.getElementById('rm-price').value);
+  const shippingCost = parseInt(document.getElementById('rm-shipping').value) || 0;
+  const shippingPattern = document.querySelector('input[name="rm-shipping-pattern"]:checked')?.value;
+  const conditionNote = document.getElementById('rm-condition-note').value.trim();
+
+  if (!price || price <= 0) {
+    msgEl.textContent = '出品価格を入力してください';
+    msgEl.className = 'text-xs text-red-600';
+    return;
+  }
+
+  const imageUrls = [];
+  document.querySelectorAll('#rm-images-grid input[type="checkbox"]:checked').forEach(cb => {
+    imageUrls.push(cb.dataset.url);
+  });
+
+  btn.disabled = true;
+  btn.textContent = '再出品処理中...';
+  msgEl.textContent = '';
+
   try {
-    const body = {condition: condition};
+    const body = {
+      condition: condition,
+      price: price,
+      estimated_win_price: _rmData.yahooPrice,
+      shipping_cost: shippingCost,
+      shipping_pattern: shippingPattern,
+    };
     if (conditionNote) body.condition_note = conditionNote;
     if (imageUrls.length > 0) body.image_urls = imageUrls;
+
     const resp = await fetch('/api/amazon/listings/' + auctionId + '/relist', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
-    const d = await resp.json();
-    if (!resp.ok) throw new Error(d.detail || '再出品に失敗しました');
-    msgEl.textContent = '再出品しました (SKU: ' + d.amazon_sku + ')';
-    msgEl.className = 'text-xs mt-1 text-green-600';
-    setTimeout(() => window.location.reload(), 1000);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || '再出品に失敗しました');
+
+    msgEl.textContent = '再出品完了！ SKU: ' + data.amazon_sku;
+    msgEl.className = 'text-xs text-green-600 font-medium';
+    btn.textContent = '再出品完了';
+    setTimeout(() => { closeRelistModal(); window.location.reload(); }, 2000);
   } catch (e) {
-    msgEl.textContent = e.message;
-    msgEl.className = 'text-xs mt-1 text-red-600';
+    msgEl.textContent = '再出品失敗: ' + e.message;
+    msgEl.className = 'text-xs text-red-600';
+    btn.textContent = 'Amazonに再出品する';
     btn.disabled = false;
-    btn.textContent = 'Amazonに再出品';
   }
 }
 
