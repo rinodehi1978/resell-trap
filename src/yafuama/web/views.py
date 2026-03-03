@@ -76,7 +76,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "active_keywords": active_keywords,
         "deals_today": deals_today,
         "last_scan": last_scan[0] if last_scan else None,
-        "keepa_tokens": getattr(keepa, "tokens_left", None) if keepa else None,
+        "keepa_tokens": getattr(keepa, "tokens_left_display", None) if keepa else None,
     }
 
     recent_deals = (

@@ -240,6 +240,11 @@ class KeepaClient:
         return self._tokens_left
 
     @property
+    def tokens_left_display(self) -> int | None:
+        """Last known token count for UI display (no staleness check)."""
+        return self._tokens_left
+
+    @property
     def is_throttled(self) -> bool:
         """True if we're currently rate-limited (429 received recently)."""
         if self._throttled_until <= 0:
