@@ -426,6 +426,18 @@ class DealScanner:
                 )
                 return None
 
+        # Verify auction is still live before notifying
+        try:
+            auction_data = await self._scraper.fetch_auction(deal.yahoo_auction_id)
+            if auction_data is None:
+                logger.info("Auction %s unreachable — skipping deal", deal.yahoo_auction_id)
+                return None
+            if getattr(auction_data, "is_closed", False):
+                logger.info("Auction %s already ended — skipping deal", deal.yahoo_auction_id)
+                return None
+        except Exception:
+            pass  # Network error — don't block the deal, let it through
+
         # Record alert BEFORE webhook (crash-safe: prevents duplicate notifications)
         alert = DealAlert(
             keyword_id=kw.id,
