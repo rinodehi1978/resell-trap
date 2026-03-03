@@ -49,7 +49,12 @@ class YahooClient:
         return await self._fetch(url)
 
     async def fetch_search_page(self, query: str, page: int = 1) -> str | None:
-        params = {"p": query, "b": str((page - 1) * 50 + 1), "n": "50"}
+        params = {
+            "p": query,
+            "b": str((page - 1) * 50 + 1),
+            "n": "50",
+            "select": "selling",  # 開催中のオークションのみ
+        }
         return await self._fetch(YAHOO_SEARCH_URL, params=params)
 
     async def _fetch(self, url: str, params: dict | None = None) -> str | None:

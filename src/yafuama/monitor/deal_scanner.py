@@ -155,6 +155,15 @@ class DealScanner:
 
         return unique[:3]
 
+    @staticmethod
+    def _is_auction_ended(yr) -> bool:
+        """Check if a Yahoo auction has already ended based on end_time."""
+        end_time = yr.end_time if hasattr(yr, "end_time") else yr.get("end_time")
+        if end_time is None:
+            return False  # Unknown end_time — don't filter
+        now = datetime.now(timezone.utc)
+        return end_time <= now
+
     async def _match_yahoo_to_amazon(self, yr, keepa_product: dict):
         """Match a Yahoo item to an Amazon/Keepa product using model number matching.
 
@@ -170,6 +179,10 @@ class DealScanner:
         buy_now = yr.buy_now_price if hasattr(yr, "buy_now_price") else yr.get("buy_now_price", 0)
 
         if buy_now <= 0:
+            return None
+
+        # Skip ended auctions
+        if self._is_auction_ended(yr):
             return None
 
         # Exclude apparel and junk
@@ -673,6 +686,10 @@ class DealScanner:
         for yr in yahoo_results:
             buy_now = yr.buy_now_price if hasattr(yr, "buy_now_price") else yr.get("buy_now_price", 0)
             if buy_now <= 0:
+                continue
+
+            # Skip ended auctions
+            if self._is_auction_ended(yr):
                 continue
 
             yahoo_title = yr.title if hasattr(yr, "title") else yr.get("title", "")
