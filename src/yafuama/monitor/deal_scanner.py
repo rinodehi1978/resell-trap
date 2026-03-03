@@ -506,7 +506,7 @@ class DealScanner:
                 db.query(WatchedKeyword)
                 .filter(
                     WatchedKeyword.is_active == True,  # noqa: E712
-                    WatchedKeyword.source.in_(["manual", "ai_demand", "ai_series"]),
+                    WatchedKeyword.source.in_(["manual", "ai_demand", "ai_series", "product_finder"]),
                 )
                 .order_by(
                     WatchedKeyword.last_scanned_at.is_(None).desc(),
