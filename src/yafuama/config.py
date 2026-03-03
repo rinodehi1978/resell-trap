@@ -58,10 +58,10 @@ class Settings(BaseSettings):
     deal_max_gross_margin_pct: float = 999.0  # 粗利率上限なし（型番一致で精度担保）
     deal_strict_margin_pct: float = 50.0   # この粗利率以上はマッチング厳格化
     deal_min_gross_profit: int = 3000     # 最低粗利益 (円)
-    deal_scan_interval: int = 600         # 自動スキャン間隔 (秒、デフォルト10分)
+    deal_scan_interval: int = 1800        # 自動スキャン間隔 (秒、30分)
     deal_default_shipping: int = 700        # 送料不明時のデフォルト送料 (円)
     deal_scan_max_pages: int = 2           # Yahoo検索の最大ページ数
-    deal_max_keepa_searches_per_keyword: int = 3  # キーワードあたりの最大Keepa個別検索数
+    deal_max_keepa_searches_per_keyword: int = 1  # キーワードあたりの最大Keepa個別検索数
     deal_min_price_for_keepa_search: int = 2000    # 個別Keepa検索の最低即決価格（円）
     # 深層検証（利益率50%超の候補をヤフオク説明文で再検証）
     # NOTE: enabled/max_per_cycleは将来実装予定（現在はmargin_thresholdのみ使用）
