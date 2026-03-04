@@ -152,14 +152,19 @@ class TestExtractModelNumbers:
         assert len(models) == 0
 
     def test_short_excluded(self):
-        # "a1" is only 2 chars → excluded (min 4)
+        # "a1" is only 2 chars → excluded (min 5)
         models = _extract_model_numbers(["a1"])
         assert len(models) == 0
 
-    def test_four_char_model_valid(self):
-        # "sv18", "hp04" → exactly 4 chars, still valid
+    def test_four_char_excluded(self):
+        # "sv18" is only 4 chars → excluded (min 5)
         models = _extract_model_numbers(["sv18"])
-        assert "sv18" in models
+        assert len(models) == 0
+
+    def test_five_char_model_valid(self):
+        # "hp04w" → exactly 5 chars, valid
+        models = _extract_model_numbers(["hp04w"])
+        assert "hp04w" in models
 
     def test_long_model_valid(self):
         models = _extract_model_numbers(["wh1000xm4"])

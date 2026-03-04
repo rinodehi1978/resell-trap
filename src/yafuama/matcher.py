@@ -448,8 +448,8 @@ def is_valid_model(s: str) -> bool:
     if not (has_letter and has_digit and not has_japanese):
         return False
 
-    # Reject model numbers shorter than 4 characters
-    if len(stripped) < 4:
+    # Reject model numbers shorter than 5 characters
+    if len(stripped) < 5:
         return False
 
     # Reject "common_word + version_number" pattern
@@ -577,7 +577,7 @@ def _extract_model_numbers(tokens: list[str]) -> set[str]:
         stripped = re.sub(r"[-ー]", "", t)
         has_letter = bool(re.search(r"[a-z]", stripped))
         has_digit = bool(re.search(r"[0-9]", stripped))
-        if has_letter and has_digit and len(stripped) >= 4:
+        if has_letter and has_digit and len(stripped) >= 5:
             if _SPEC_UNIT_RE.match(stripped):
                 continue  # Skip spec/unit tokens (4k, 1ch, 128gb, etc.)
             models.add(stripped)
@@ -599,11 +599,11 @@ def _models_color_suffix_match(models_a: set[str], models_b: set[str]) -> bool:
         for b in models_b:
             if a == b:
                 continue
-            if len(b) > len(a) and b.startswith(a) and len(a) >= 4:
+            if len(b) > len(a) and b.startswith(a) and len(a) >= 5:
                 suffix = b[len(a):]
                 if suffix.isalpha() and len(suffix) >= 2:
                     return True
-            if len(a) > len(b) and a.startswith(b) and len(b) >= 4:
+            if len(a) > len(b) and a.startswith(b) and len(b) >= 5:
                 suffix = a[len(b):]
                 if suffix.isalpha() and len(suffix) >= 2:
                     return True
