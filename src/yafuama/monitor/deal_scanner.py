@@ -852,7 +852,7 @@ class DealScanner:
             result = match_products(yahoo_title, amazon_title)
 
             # Keepa model フィールドで型番補強
-            if not result.model_match:
+            if not result.model_match and not result.model_conflict:
                 keepa_model = kp.get("model") or ""
                 if keepa_model:
                     yahoo_models = extract_model_numbers_from_text(yahoo_title)

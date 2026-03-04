@@ -138,9 +138,10 @@ class TestExtractModelNumbers:
         models = _extract_model_numbers(["wh-1000xm4", "sony", "headphone"])
         assert "wh1000xm4" in models
 
-    def test_number_letter(self):
+    def test_number_letter_short_excluded(self):
+        # "3ds" is only 3 chars → excluded (min 4)
         models = _extract_model_numbers(["3ds", "nintendo"])
-        assert "3ds" in models
+        assert len(models) == 0
 
     def test_pure_letters_excluded(self):
         models = _extract_model_numbers(["sony", "nintendo"])
@@ -151,9 +152,23 @@ class TestExtractModelNumbers:
         assert len(models) == 0
 
     def test_short_excluded(self):
-        # single char tokens excluded (len < 2 after strip)
+        # "a1" is only 2 chars → excluded (min 4)
         models = _extract_model_numbers(["a1"])
-        assert "a1" in models  # len == 2, still valid
+        assert len(models) == 0
+
+    def test_four_char_model_valid(self):
+        # "sv18", "hp04" → exactly 4 chars, still valid
+        models = _extract_model_numbers(["sv18"])
+        assert "sv18" in models
+
+    def test_long_model_valid(self):
+        models = _extract_model_numbers(["wh1000xm4"])
+        assert "wh1000xm4" in models
+
+    def test_hyphen_normalization(self):
+        # Hyphens stripped: "MO-F1807-W" → "mof1807w"
+        models = _extract_model_numbers(["mo-f1807-w"])
+        assert "mof1807w" in models
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +254,24 @@ class TestMatchProducts:
         """iPhone 14 vs iPhone 15 are different products."""
         r = match_products("Apple iPhone14 ケース", "Apple iPhone15 ケース")
         assert r.model_conflict
+
+    def test_different_model_numbers_iris_ohyama(self):
+        """MO-F1807-W vs AMO-F1811-B: different model numbers → no match."""
+        r = match_products(
+            "アイリスオーヤマ オーブンレンジ MO-F1807-W",
+            "アイリスオーヤマ オーブンレンジ AMO-F1811-B",
+        )
+        assert not r.is_likely_match
+        assert r.model_conflict or not r.model_match
+
+    def test_same_model_with_hyphens(self):
+        """MO-F1807-W vs MOF1807W: same model, hyphens ignored → match."""
+        r = match_products(
+            "アイリスオーヤマ MO-F1807-W オーブンレンジ",
+            "アイリスオーヤマ MOF1807W オーブンレンジ",
+        )
+        assert r.is_likely_match
+        assert r.model_match
 
     # --- EDGE CASES ---
 
