@@ -546,8 +546,8 @@ class DealScanner:
                     )
                     break
 
-                # Skip dormant keywords
-                dormant_threshold = 20
+                # Skip dormant keywords (5+ consecutive scans with no deals)
+                dormant_threshold = 5
                 if kw.scans_since_last_deal >= dormant_threshold and kw.total_scans >= dormant_threshold:
                     kw.last_scanned_at = datetime.now(timezone.utc)
                     kw.total_scans += 1
@@ -588,27 +588,29 @@ class DealScanner:
     def _cleanup_keywords(self, db) -> None:
         """Auto-cleanup underperforming keywords after each scan cycle.
 
+        執着しない。見つからないキーワードは早く切り捨てる。
         Rules:
-        - AI-generated + 0 deals + 10+ scans → DELETE
-        - Manual + 0 deals + 50+ scans → DELETE
-        - Manual + has deals + 50+ scans since last deal → PAUSE (is_active=False)
+        - AI/Product Finder生成 + 0 deals + 3+ scans → DEACTIVATE
+        - Manual + 0 deals + 10+ scans → DEACTIVATE
+        - Any source + has deals + 5+ consecutive scans without deal → DEACTIVATE
         """
-        cleanup_threshold_manual = 50
-        cleanup_threshold_ai = 10
+        cleanup_threshold_manual = 10
+        cleanup_threshold_ai = 3
+        dormant_since_last_deal = 5
 
         keywords = db.query(WatchedKeyword).filter(WatchedKeyword.is_active == True).all()  # noqa: E712
         for kw in keywords:
-            # AI-generated: deactivate after 10 scans with no results
+            # AI/PF-generated: deactivate after 3 scans with no results
             if kw.source != "manual" and kw.total_deals_found == 0 and kw.total_scans >= cleanup_threshold_ai:
                 logger.info(
-                    "Auto-deactivating AI keyword '%s': %d scans, 0 deals",
-                    kw.keyword, kw.total_scans,
+                    "Auto-deactivating keyword '%s' (source=%s): %d scans, 0 deals",
+                    kw.keyword, kw.source, kw.total_scans,
                 )
                 kw.is_active = False
                 kw.auto_deactivated_at = datetime.now(timezone.utc)
                 continue
 
-            # Manual + never found a deal: deactivate after 50 scans
+            # Manual + never found a deal: deactivate after 10 scans
             if kw.source == "manual" and kw.total_deals_found == 0 and kw.total_scans >= cleanup_threshold_manual:
                 logger.info(
                     "Auto-deactivating manual keyword '%s': %d scans, 0 deals",
@@ -618,13 +620,14 @@ class DealScanner:
                 kw.auto_deactivated_at = datetime.now(timezone.utc)
                 continue
 
-            # Manual + has deals but dormant: pause after 50 consecutive scans without new deal
-            if kw.source == "manual" and kw.total_deals_found > 0 and kw.scans_since_last_deal >= cleanup_threshold_manual:
+            # Any keyword with deals but gone dormant: deactivate after 5 consecutive dry scans
+            if kw.total_deals_found > 0 and kw.scans_since_last_deal >= dormant_since_last_deal:
                 logger.info(
-                    "Auto-pausing manual keyword '%s': %d scans since last deal",
+                    "Auto-deactivating dormant keyword '%s': %d scans since last deal",
                     kw.keyword, kw.scans_since_last_deal,
                 )
                 kw.is_active = False
+                kw.auto_deactivated_at = datetime.now(timezone.utc)
 
     async def scan_keyword_by_id(self, keyword_id: int) -> list[dict]:
         """Manually trigger scan for a single keyword. Returns list of new deal dicts."""
