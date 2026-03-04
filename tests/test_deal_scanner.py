@@ -18,6 +18,7 @@ class FakeYahooResult:
     shipping_cost: int | None = None
     url: str = ""
     image_url: str = ""
+    end_time: None = None
 
 
 def _make_keepa_product(asin, title, used_price=5000, rank=30000, model="", new_price=-1):
@@ -40,6 +41,8 @@ def scanner():
     scraper = AsyncMock()
     keepa = AsyncMock()
     keepa.clear_search_cache = MagicMock()
+    keepa.tokens_left = 500
+    keepa.is_throttled = False
     return DealScanner(scraper, keepa, webhook_url="", webhook_type="discord")
 
 
@@ -48,6 +51,8 @@ def scanner_with_sp_api():
     scraper = AsyncMock()
     keepa = AsyncMock()
     keepa.clear_search_cache = MagicMock()
+    keepa.tokens_left = 500
+    keepa.is_throttled = False
     sp_api = AsyncMock()
     return DealScanner(scraper, keepa, webhook_url="", webhook_type="discord", sp_api_client=sp_api)
 

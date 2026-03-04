@@ -535,8 +535,9 @@ class DealScanner:
 
         Phase 1: Product Finder pipeline (Amazon-first, main source)
           - Keepa Product Finder → extract model numbers → Yahoo search → match → notify
-        Phase 2: Manual keyword scan (source="manual" only, legacy)
-          - Existing Yahoo→Keepa flow for user-added keywords
+        Phase 2: Keyword scan (model + generic)
+          - Model keywords: Yahoo search → Keepa targeted match → score
+          - Generic keywords: Keepa search → filter → extract models → Yahoo scan
         """
         self._deep_validation_count = 0
         self._keepa.clear_search_cache()
@@ -697,8 +698,23 @@ class DealScanner:
         finally:
             db.close()
 
+    def _is_generic_keyword(self, keyword: str) -> bool:
+        """Check if keyword is generic (no model number pattern).
+
+        Generic keywords like "オーブンレンジ", "AVアンプ" should go Amazon-first.
+        Model keywords like "wh1000xm4", "cfi2000a01" use normal Yahoo-first flow.
+        """
+        models = extract_model_numbers_from_text(keyword)
+        valid_models = [m for m in models if len(m) >= 5 and is_valid_model(m)]
+        return len(valid_models) == 0
+
     async def _scan_keyword(self, kw: WatchedKeyword, db) -> list[dict]:
-        """Phase 2: Search Yahoo + Keepa, score deals, notify on new ones."""
+        """Phase 2: Route to Amazon-first or Yahoo-first based on keyword type."""
+        # Generic keywords → Amazon-first (Keepa search → filter → extract models → Yahoo)
+        if self._is_generic_keyword(kw.keyword):
+            return await self._scan_generic_keyword(kw, db)
+
+        # Model keywords → existing Yahoo-first flow
         deals = await self._find_deals(kw.keyword)
         if not deals:
             return []
@@ -712,6 +728,143 @@ class DealScanner:
         logger.info(
             "Keyword '%s': found %d deals, %d new",
             kw.keyword, len(deals), len(new_deals),
+        )
+        return new_deals
+
+    async def _scan_generic_keyword(self, kw: WatchedKeyword, db) -> list[dict]:
+        """Amazon-first scan for generic keywords.
+
+        Flow: Keepa search → filter by criteria → extract models →
+              register as WatchedKeywords + immediate Yahoo scan.
+
+        Generic keywords (e.g. "オーブンレンジ") serve as Amazon discovery seeds.
+        They find qualifying Amazon products, extract model numbers, and register
+        those models for persistent monitoring.
+        """
+        # Step 1: Search Keepa with generic keyword (40 tokens)
+        try:
+            keepa_products = await self._keepa.search_products(
+                kw.keyword, stats=settings.keepa_default_stats_days
+            )
+        except Exception as e:
+            logger.warning("Generic keyword Keepa search failed for '%s': %s", kw.keyword, e)
+            return []
+
+        if not keepa_products:
+            logger.info("Generic keyword '%s': no Keepa results", kw.keyword)
+            return []
+
+        # Step 2: Filter by user criteria (same as Product Finder)
+        filtered = []
+        for p in keepa_products:
+            stats = p.get("stats") or {}
+            current = stats.get("current") or []
+            used = current[2] if len(current) > 2 and current[2] not in (None, -1) else 0
+            new = current[1] if len(current) > 1 and current[1] not in (None, -1) else 0
+
+            # Skip if used price below minimum
+            if used < settings.demand_finder_min_used_price:
+                continue
+            # Skip if used >= new (overpriced used)
+            if new > 0 and used >= new:
+                continue
+
+            filtered.append(p)
+
+        logger.info(
+            "Generic keyword '%s': %d Keepa results, %d after filter",
+            kw.keyword, len(keepa_products), len(filtered),
+        )
+
+        if not filtered:
+            return []
+
+        # Step 3: Extract models and register as WatchedKeywords
+        registered = 0
+        for p in filtered:
+            models = self._extract_yahoo_keywords(p)
+            for model in models:
+                existing = (
+                    db.query(WatchedKeyword)
+                    .filter(WatchedKeyword.keyword == model)
+                    .first()
+                )
+                if existing:
+                    continue
+                new_kw = WatchedKeyword(
+                    keyword=model,
+                    is_active=True,
+                    source="deal_extract",
+                    parent_keyword_id=kw.id,
+                    confidence=0.8,
+                    notes=f"Extracted from Keepa: {p.get('asin', '')} via '{kw.keyword}'",
+                )
+                try:
+                    nested = db.begin_nested()
+                    db.add(new_kw)
+                    db.flush()
+                    registered += 1
+                    logger.info(
+                        "Auto-registered model '%s' from generic keyword '%s' (ASIN: %s)",
+                        model, kw.keyword, p.get("asin", ""),
+                    )
+                except IntegrityError:
+                    nested.rollback()
+
+        if registered:
+            logger.info(
+                "Generic keyword '%s': registered %d new model keywords",
+                kw.keyword, registered,
+            )
+
+        # Step 4: Immediate Yahoo scan with extracted models (like Phase 1)
+        new_deals = []
+        yahoo_searches = 0
+        max_yahoo = settings.pf_max_yahoo_searches
+
+        for product in filtered:
+            keywords = self._extract_yahoo_keywords(product)
+            if not keywords:
+                continue
+
+            for keyword in keywords:
+                if yahoo_searches >= max_yahoo:
+                    break
+
+                # Search Yahoo with specific model
+                yahoo_results = []
+                for page in range(1, settings.deal_scan_max_pages + 1):
+                    try:
+                        page_results = await self._scraper.search(keyword, page=page)
+                    except Exception as e:
+                        logger.warning("Yahoo search failed for model '%s': %s", keyword, e)
+                        break
+                    if not page_results:
+                        break
+                    yahoo_results.extend(page_results)
+                yahoo_searches += 1
+
+                if not yahoo_results:
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # Match each Yahoo result against this Amazon product
+                for yr in yahoo_results:
+                    deal = await self._match_yahoo_to_amazon(yr, product)
+                    if deal and (
+                        deal.gross_margin_pct >= settings.deal_min_gross_margin_pct
+                        and deal.gross_margin_pct <= settings.deal_max_gross_margin_pct
+                        and deal.gross_profit >= settings.deal_min_gross_profit
+                    ):
+                        result = await self._process_deal(deal, kw, db)
+                        if result:
+                            new_deals.append(result)
+
+                await asyncio.sleep(0.3)
+
+        logger.info(
+            "Generic keyword '%s': %d Yahoo searches, %d deals, %d models registered",
+            kw.keyword, yahoo_searches, len(new_deals), registered,
         )
         return new_deals
 
