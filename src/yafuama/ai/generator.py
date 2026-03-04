@@ -98,7 +98,8 @@ def generate_all(
     candidates.extend(generate_title_decomp(insights, existing, max_per_strategy))
     candidates.extend(generate_category_keywords(insights, existing, max_per_strategy))
     candidates.extend(generate_synonyms(insights, existing, max_per_strategy))
-    candidates.extend(generate_series_expansion(db, existing, max_per_strategy))
+    if settings.series_expansion_max_per_cycle > 0:
+        candidates.extend(generate_series_expansion(db, existing, max_per_strategy))
     candidates.extend(generate_demand(demand_products or [], existing, max_per_strategy))
 
     # Final dedup + apparel filter

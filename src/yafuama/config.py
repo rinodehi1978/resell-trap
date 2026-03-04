@@ -99,14 +99,14 @@ class Settings(BaseSettings):
     # 反映確認
     verification_delay_seconds: int = 30    # 自動アクション後の確認待機秒数
 
-    # Series Expansion（型番シリーズ横展開）
+    # Series Expansion（型番シリーズ横展開）— 無効化済み
     series_expansion_min_profit: int = 3000       # シリーズ展開トリガーの最低粗利益（円）
     series_expansion_max_siblings: int = 4        # 1型番あたりの最大兄弟生成数
-    series_expansion_max_per_cycle: int = 10      # Discoveryサイクルあたりの最大生成数
+    series_expansion_max_per_cycle: int = 0       # 0=無効（Amazon起点に集約）
 
     # Demand Discovery（需要ベースキーワード発見）
     demand_finder_enabled: bool = True
-    demand_finder_min_drops90: int = 5        # 過去3ヶ月の最低販売回数
+    demand_finder_min_drops90: int = 1        # 過去3ヶ月で1個以上売れていればOK
     demand_finder_min_used_price: int = 10000 # 中古最低価格（円）
     demand_finder_max_results: int = 50       # Product Finder最大取得件数
 
