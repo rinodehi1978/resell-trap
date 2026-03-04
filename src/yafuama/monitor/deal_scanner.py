@@ -54,7 +54,6 @@ class DealScanner:
         self._keepa = keepa_client
         self._webhook_url = webhook_url
         self._webhook_type = webhook_type
-        self._deep_validation_count = 0
         self._sp_api = sp_api_client
         self._pf_cache: tuple[float, list[dict]] | None = None
 
@@ -471,13 +470,6 @@ class DealScanner:
         # Send notification (after DB save to prevent duplicates on crash)
         await self._send_webhook(deal, kw)
 
-        # 型番シリーズ横展開: 利益Deal発見時に兄弟モデル候補を自動生成
-        if deal.gross_profit >= settings.series_expansion_min_profit:
-            await self._enqueue_series_candidates(deal, kw, db)
-
-        # ディールから型番を自動抽出 → WatchedKeywordに登録
-        self._extract_and_register_models(deal, kw, db)
-
         return {
             "yahoo_title": deal.yahoo_title,
             "yahoo_price": deal.yahoo_price,
@@ -485,48 +477,6 @@ class DealScanner:
             "gross_profit": deal.gross_profit,
             "gross_margin_pct": deal.gross_margin_pct,
         }
-
-    def _extract_and_register_models(self, deal, kw: WatchedKeyword, db) -> None:
-        """ディール発見時にAmazonタイトルから型番を抽出し、WatchedKeywordに自動登録。
-
-        汎用キーワード（オーブンレンジ等）から具体的な型番キーワードを生み出す。
-        """
-        amazon_title = deal.amazon_title or ""
-        if not amazon_title:
-            return
-
-        models = extract_model_numbers_from_text(amazon_title)
-        for model in models:
-            if not is_valid_model(model):
-                continue
-            if _is_barcode(model):
-                continue
-            # Already exists?
-            existing = (
-                db.query(WatchedKeyword)
-                .filter(WatchedKeyword.keyword == model)
-                .first()
-            )
-            if existing:
-                continue
-            new_kw = WatchedKeyword(
-                keyword=model,
-                is_active=True,
-                source="deal_extract",
-                parent_keyword_id=kw.id,
-                confidence=0.8,
-                notes=f"Extracted from deal: {deal.amazon_asin}",
-            )
-            try:
-                nested = db.begin_nested()
-                db.add(new_kw)
-                db.flush()
-                logger.info(
-                    "Auto-registered model keyword '%s' from deal %s (parent: %s)",
-                    model, deal.amazon_asin, kw.keyword,
-                )
-            except IntegrityError:
-                nested.rollback()
 
     # ── Main scan loop ────────────────────────────────────────────────
 
@@ -539,7 +489,6 @@ class DealScanner:
           - Model keywords: Yahoo search → Keepa targeted match → score
           - Generic keywords: Keepa search → filter → extract models → Yahoo scan
         """
-        self._deep_validation_count = 0
         self._keepa.clear_search_cache()
         if self._sp_api is not None:
             self._sp_api.reset_fee_quota()
@@ -1130,106 +1079,6 @@ class DealScanner:
                 best_deal = deal
 
         return best_deal
-
-    async def _enqueue_series_candidates(self, deal, kw, db) -> None:
-        """利益Deal発見時に兄弟モデルのKeywordCandidateを即座にDB登録。"""
-        from ..ai.generator import (
-            _decompose_model,
-            _guess_step,
-            format_model_keyword,
-            resolve_brand_preference,
-        )
-        from ..models import KeywordCandidate
-
-        brand, models, _ = extract_product_info(deal.yahoo_title)
-        if not models:
-            return
-
-        # 短い型番が含まれる場合、ブランド名のYahoo検索優先形式を事前解決
-        if brand:
-            needs_brand_resolve = False
-            for m in models:
-                parts = _decompose_model(m)
-                if parts and len(parts[0]) + 1 + len(parts[2]) < 4:
-                    needs_brand_resolve = True
-                    break
-            if needs_brand_resolve:
-                await resolve_brand_preference(self._scraper, brand)
-
-        # 既存キーワード・候補を取得して重複排除（スカラー値のみ取得）
-        existing_kws = {
-            val.lower()
-            for (val,) in db.query(WatchedKeyword.keyword).all()
-        }
-        existing_candidates = {
-            val.lower()
-            for (val,) in db.query(KeywordCandidate.keyword)
-            .filter(KeywordCandidate.status.notin_(["rejected"]))
-            .all()
-        }
-        existing = existing_kws | existing_candidates
-
-        count = 0
-        for model in models:
-            parts = _decompose_model(model)
-            if not parts:
-                continue
-            prefix, num, suffix = parts
-            step = _guess_step(num)
-
-            for offset in [-2, -1, 1, 2]:
-                sibling_num = num + offset * step
-                if sibling_num <= 0:
-                    continue
-                sibling_model = f"{prefix}{sibling_num}{suffix}"
-                keyword = format_model_keyword(brand, sibling_model)
-
-                if keyword.lower() in existing:
-                    continue
-
-                db.add(KeywordCandidate(
-                    keyword=keyword,
-                    strategy="series",
-                    confidence=0.75,
-                    parent_keyword_id=kw.id,
-                    reasoning=f"利益確認済み「{brand or ''} {model}」(¥{deal.gross_profit:,})のシリーズ展開",
-                    status="pending",
-                ))
-                existing.add(keyword.lower())
-                count += 1
-
-                if count >= settings.series_expansion_max_siblings:
-                    if count > 0:
-                        logger.info("Series expansion: %d candidates from '%s'", count, deal.yahoo_title[:50])
-                    return
-
-        if count > 0:
-            logger.info("Series expansion: %d candidates from '%s'", count, deal.yahoo_title[:50])
-
-    async def _deep_validate_deal(self, yahoo_auction_id: str, yahoo_title: str) -> bool:
-        """ヤフオク説明文を取得し、アクセサリー/付属品でないか検証。
-
-        Returns True = pass（本体の可能性が高い）、False = reject（アクセサリーの疑い）
-        """
-        self._deep_validation_count += 1
-        try:
-            description = await self._scraper.fetch_auction_description(yahoo_auction_id)
-        except Exception as e:
-            logger.warning("Deep validation fetch failed for %s: %s", yahoo_auction_id, e)
-            return True  # 取得失敗時は通過（保守的判断）
-
-        if not description:
-            return True  # 説明文なしは通過
-
-        combined_text = yahoo_title + " " + description
-        if extract_accessory_signals_from_text(combined_text):
-            logger.info(
-                "Deep validation rejected %s: accessory signal in description",
-                yahoo_auction_id,
-            )
-            return False
-
-        return True
 
     async def _send_webhook(self, deal, kw: WatchedKeyword) -> None:
         """Send a deal notification via webhook."""

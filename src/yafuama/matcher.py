@@ -584,32 +584,6 @@ def _extract_model_numbers(tokens: list[str]) -> set[str]:
     return models
 
 
-def _models_color_suffix_match(models_a: set[str], models_b: set[str]) -> bool:
-    """Check if models match after ignoring color code suffixes.
-
-    Handles cases like HP04 vs HP04IBN, SV18 vs SV18FF, TP07 vs TP07WS
-    where the suffix is a 2+ letter color/SKU code appended to the base model.
-
-    Rules:
-    - One model must be a prefix of the other
-    - The remaining suffix must be purely alphabetical (no digits)
-    - Suffix must be 2+ characters (single-letter suffixes like 'K' may be variants)
-    """
-    for a in models_a:
-        for b in models_b:
-            if a == b:
-                continue
-            if len(b) > len(a) and b.startswith(a) and len(a) >= 5:
-                suffix = b[len(a):]
-                if suffix.isalpha() and len(suffix) >= 2:
-                    return True
-            if len(a) > len(b) and a.startswith(b) and len(b) >= 5:
-                suffix = a[len(b):]
-                if suffix.isalpha() and len(suffix) >= 2:
-                    return True
-    return False
-
-
 def _extract_brand(tokens: list[str]) -> str | None:
     """Find the first known brand among canonicalized tokens."""
     for t in tokens:
@@ -1060,12 +1034,8 @@ def match_products(yahoo_title: str, amazon_title: str) -> MatchResult:
         if y_models & a_models:
             model_match = True
             score += 0.50
-        elif _models_color_suffix_match(y_models, a_models):
-            # e.g. HP04 vs HP04IBN, SV18FF vs SV18 — color code suffix only
-            model_match = True
-            score += 0.50
         else:
-            # Both have model numbers but none match → very likely different products
+            # Both have model numbers but none match → different products
             model_conflict = True
             score -= 0.30
 
