@@ -232,6 +232,15 @@ class MonitorScheduler:
         # Sync DealAlert prices when Yahoo price changes
         if data.win_price and data.win_price != old_win_price:
             self._sync_deal_alert_prices(item.auction_id, data.win_price, db)
+            # Auto-sync Amazon price
+            price_synced = await self._auto_sync_amazon_price(
+                item, old_win_price, data.win_price, db,
+            )
+            if price_synced:
+                self._schedule_verification(
+                    item.id, item.auction_id, item.amazon_sku,
+                    item.amazon_price, "price_sync",
+                )
 
         # Stop monitoring ended items
         if data.status != "active":
@@ -499,8 +508,23 @@ class MonitorScheduler:
                     db.commit()
                     detected += 1
 
-                    # Discord notification: inform user to re-list from UI
-                    await self._notify_relist_detected(item, gross_profit, margin_pct)
+                    # Auto-relist on Amazon
+                    relist_success = await self._auto_relist_to_amazon(
+                        item, db, gross_profit, margin_pct,
+                    )
+                    db.commit()
+
+                    # Schedule verification if auto-relist succeeded
+                    if relist_success:
+                        self._schedule_verification(
+                            item.id, item.auction_id, item.amazon_sku,
+                            item.amazon_price, "relist",
+                        )
+
+                    # Discord notification
+                    await self._notify_relist_detected(
+                        item, gross_profit, margin_pct, auto_relisted=relist_success,
+                    )
 
                     await asyncio.sleep(0.3)
                 except Exception as e:
@@ -523,35 +547,44 @@ class MonitorScheduler:
         item: MonitoredItem,
         gross_profit: int,
         margin_pct: float,
+        *,
+        auto_relisted: bool = False,
     ) -> None:
-        """Send Discord notification when a Yahoo re-list is detected.
-
-        User can re-list on Amazon from the UI (detail page or keywords page).
-        """
+        """Send Discord notification when a Yahoo re-list is detected."""
         from ..notifier.webhook import send_webhook
 
         webhook_url = settings.webhook_url
         if not webhook_url:
             return
 
-        yahoo_url = f"https://auctions.yahoo.co.jp/jp/auction/{item.auction_id}"
         detail_url = f"https://yafuama.fly.dev/items/{item.auction_id}"
-
         profit_str = f"¥{gross_profit:,} ({margin_pct:.1f}%)" if item.amazon_price else "価格未設定"
-        color = 0x00CC66 if margin_pct >= settings.relist_min_margin_pct else 0xFF9800
+
+        if auto_relisted:
+            title = f"自動再出品完了: {(item.title or '')[:80]}"
+            color = 0x00CC66
+            footer = "ヤフアマ | Amazon自動再出品済み"
+        else:
+            title = f"再出品検知（手動対応要）: {(item.title or '')[:70]}"
+            color = 0xFF9800
+            footer = "ヤフアマ | 詳細ページから再出品できます"
+
+        fields = [
+            {"name": "Yahoo価格", "value": f"¥{item.current_price:,}", "inline": True},
+            {"name": "Amazon売価", "value": f"¥{item.amazon_price:,}" if item.amazon_price else "-", "inline": True},
+            {"name": "想定利益", "value": profit_str, "inline": True},
+            {"name": "再出品回数", "value": str(item.relist_count), "inline": True},
+        ]
+        if auto_relisted and item.amazon_sku:
+            fields.append({"name": "SKU", "value": item.amazon_sku, "inline": True})
 
         payload = {
             "embeds": [{
-                "title": f"再出品検知: {(item.title or '')[:80]}",
+                "title": title,
                 "url": detail_url,
                 "color": color,
-                "fields": [
-                    {"name": "Yahoo価格", "value": f"¥{item.current_price:,}", "inline": True},
-                    {"name": "Amazon売価", "value": f"¥{item.amazon_price:,}" if item.amazon_price else "-", "inline": True},
-                    {"name": "想定利益", "value": profit_str, "inline": True},
-                    {"name": "再出品回数", "value": str(item.relist_count), "inline": True},
-                ],
-                "footer": {"text": "ヤフアマ | 詳細ページから再出品できます"},
+                "fields": fields,
+                "footer": {"text": footer},
             }],
         }
 
@@ -559,6 +592,405 @@ class MonitorScheduler:
             await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
         except Exception as e:
             logger.warning("Relist detection webhook failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Auto-relist on Amazon（ヤフオク再出品 → Amazon自動再出品）
+    # ------------------------------------------------------------------
+
+    async def _auto_relist_to_amazon(
+        self,
+        item: MonitoredItem,
+        db: Session,
+        gross_profit: int,
+        margin_pct: float,
+    ) -> bool:
+        """Automatically re-list on Amazon after Yahoo relist detection.
+
+        Returns True on success, False on failure.
+        """
+        import json
+        from ..amazon import AmazonApiError
+        from ..amazon.listing import ListingParams, submit_to_amazon
+        from ..amazon.pricing import calculate_amazon_price, generate_sku
+        from ..amazon.shipping import get_pattern_by_key
+        from ..main import app_state
+
+        if not settings.relist_auto_enabled:
+            logger.info("Auto-relist: disabled by config for %s", item.auction_id)
+            return False
+
+        sp_client = app_state.get("sp_api")
+        if not sp_client:
+            logger.warning("Auto-relist: SP-API not available for %s", item.auction_id)
+            return False
+
+        if not item.amazon_asin:
+            logger.warning("Auto-relist: no ASIN for %s", item.auction_id)
+            return False
+
+        # Profitability guard
+        if margin_pct < settings.relist_min_margin_pct or gross_profit < settings.relist_min_profit:
+            logger.info(
+                "Auto-relist: skipped %s (profit=¥%d, margin=%.1f%%)",
+                item.auction_id, gross_profit, margin_pct,
+            )
+            return False
+
+        # Generate new SKU
+        suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
+        sku = f"{generate_sku(item.auction_id)}-R{suffix}"
+
+        # Calculate price from latest Yahoo BIN price
+        price = calculate_amazon_price(
+            item.estimated_win_price, item.shipping_cost,
+            margin_pct=item.amazon_margin_pct,
+            amazon_fee_pct=item.amazon_fee_pct,
+        )
+        if price <= 0:
+            logger.warning("Auto-relist: price is zero for %s", item.auction_id)
+            return False
+
+        # Shipping pattern
+        pattern = get_pattern_by_key(item.amazon_shipping_pattern or "2_3_days")
+        if not pattern:
+            pattern = get_pattern_by_key("2_3_days")
+
+        # Images
+        image_urls = []
+        if item.amazon_image_urls:
+            try:
+                image_urls = json.loads(item.amazon_image_urls)
+            except (ValueError, TypeError):
+                image_urls = []
+        if not image_urls:
+            scraper = app_state.get("scraper")
+            if scraper:
+                try:
+                    image_urls = await scraper.fetch_auction_images(item.auction_id)
+                except Exception:
+                    logger.warning("Auto-relist: failed to scrape images for %s", item.auction_id)
+
+        try:
+            product_type = await sp_client.get_product_type(item.amazon_asin)
+            result = await submit_to_amazon(
+                sp_client,
+                ListingParams(
+                    seller_id=settings.sp_api_seller_id,
+                    sku=sku,
+                    asin=item.amazon_asin,
+                    price=price,
+                    condition=item.amazon_condition or "used_very_good",
+                    lead_time=pattern.lead_time_days,
+                    shipping_template=pattern.template_name,
+                    product_type=product_type,
+                    condition_note=item.amazon_condition_note or "",
+                    image_urls=image_urls,
+                    auction_id=item.auction_id,
+                ),
+            )
+        except AmazonApiError as e:
+            logger.error("Auto-relist: SP-API failed for %s: %s", item.auction_id, e)
+            return False
+        except Exception as e:
+            logger.error("Auto-relist: unexpected error for %s: %s", item.auction_id, e)
+            return False
+
+        # Update item on success
+        item.amazon_sku = sku
+        item.amazon_listing_status = "active"
+        item.amazon_price = price
+        item.amazon_lead_time_days = pattern.lead_time_days
+        if result.s3_image_urls:
+            item.amazon_image_urls = json.dumps(result.s3_image_urls)
+        item.amazon_last_synced_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.now(timezone.utc)
+        item.seller_central_checklist = ""
+
+        db.add(StatusHistory(
+            item_id=item.id,
+            auction_id=item.auction_id,
+            change_type="amazon_listing",
+            new_status=sku,
+            old_status="auto_relist",
+        ))
+
+        logger.info("Auto-relist: success for %s (SKU=%s, ¥%d)", item.auction_id, sku, price)
+        return True
+
+    # ------------------------------------------------------------------
+    # Auto price sync（Yahoo価格変動 → Amazon価格自動更新）
+    # ------------------------------------------------------------------
+
+    async def _auto_sync_amazon_price(
+        self,
+        item: MonitoredItem,
+        old_win_price: int,
+        new_win_price: int,
+        db: Session,
+    ) -> bool:
+        """Auto-update Amazon price when Yahoo BIN price changes.
+
+        Returns True if Amazon price was updated.
+        """
+        from ..amazon import AmazonApiError
+        from ..amazon.pricing import calculate_amazon_price
+        from ..main import app_state
+
+        if not settings.price_sync_enabled:
+            return False
+
+        if not item.amazon_sku or item.amazon_listing_status != "active":
+            return False
+
+        sp_client = app_state.get("sp_api")
+        if not sp_client:
+            return False
+
+        old_amazon_price = item.amazon_price or 0
+        new_amazon_price = calculate_amazon_price(
+            new_win_price,
+            item.shipping_cost,
+            margin_pct=item.amazon_margin_pct,
+            amazon_fee_pct=item.amazon_fee_pct,
+        )
+
+        if new_amazon_price <= 0 or new_amazon_price == old_amazon_price:
+            return False
+
+        logger.info(
+            "Price sync: %s Yahoo ¥%d→¥%d, Amazon ¥%d→¥%d",
+            item.auction_id, old_win_price, new_win_price,
+            old_amazon_price, new_amazon_price,
+        )
+
+        try:
+            seller_id = settings.sp_api_seller_id
+            await sp_client.patch_listing_price(seller_id, item.amazon_sku, new_amazon_price)
+            await sp_client.submit_price_feed(seller_id, item.amazon_sku, new_amazon_price)
+        except AmazonApiError as e:
+            logger.warning(
+                "Price sync: SP-API failed for %s (SKU=%s): %s",
+                item.auction_id, item.amazon_sku, e,
+            )
+            return False
+
+        item.amazon_price = new_amazon_price
+        item.amazon_last_synced_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.now(timezone.utc)
+
+        db.add(StatusHistory(
+            item_id=item.id,
+            auction_id=item.auction_id,
+            change_type="amazon_price_sync",
+            old_price=old_amazon_price,
+            new_price=new_amazon_price,
+            old_status=f"Yahoo即決 ¥{old_win_price:,}→¥{new_win_price:,}",
+        ))
+
+        logger.info(
+            "Price sync: success %s Amazon ¥%d→¥%d",
+            item.auction_id, old_amazon_price, new_amazon_price,
+        )
+
+        # Discord notification
+        await self._notify_price_sync(
+            item, old_amazon_price, new_amazon_price,
+            old_win_price, new_win_price,
+        )
+        return True
+
+    async def _notify_price_sync(
+        self,
+        item: MonitoredItem,
+        old_amazon_price: int,
+        new_amazon_price: int,
+        old_win_price: int,
+        new_win_price: int,
+    ) -> None:
+        """Send Discord notification for auto price sync."""
+        from ..notifier.webhook import send_webhook
+
+        webhook_url = settings.webhook_url
+        if not webhook_url:
+            return
+
+        direction = "\u2191" if new_amazon_price > old_amazon_price else "\u2193"
+        payload = {
+            "embeds": [{
+                "title": f"価格自動同期{direction}: {(item.title or '')[:80]}",
+                "url": f"https://yafuama.fly.dev/items/{item.auction_id}",
+                "color": 0x2196F3,
+                "fields": [
+                    {"name": "Yahoo即決", "value": f"¥{old_win_price:,} → ¥{new_win_price:,}", "inline": True},
+                    {"name": "Amazon売価", "value": f"¥{old_amazon_price:,} → ¥{new_amazon_price:,}", "inline": True},
+                    {"name": "SKU", "value": item.amazon_sku or "-", "inline": True},
+                ],
+                "footer": {"text": "ヤフアマ | Amazon価格自動同期"},
+            }],
+        }
+        try:
+            await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
+        except Exception as e:
+            logger.warning("Price sync webhook failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Verification（反映確認）
+    # ------------------------------------------------------------------
+
+    def _schedule_verification(
+        self,
+        item_id: int,
+        auction_id: str,
+        sku: str,
+        expected_price: int,
+        action_type: str,
+    ) -> None:
+        """Schedule a one-shot verification job after auto-action."""
+        run_time = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.verification_delay_seconds,
+        )
+        job_id = f"verify_{sku}_{action_type}"
+        try:
+            self._scheduler.add_job(
+                self._verify_listing,
+                "date",
+                run_date=run_time,
+                id=job_id,
+                replace_existing=True,
+                args=[item_id, auction_id, sku, expected_price, action_type],
+            )
+            logger.info(
+                "Verification scheduled: %s SKU=%s in %ds",
+                action_type, sku, settings.verification_delay_seconds,
+            )
+        except Exception as e:
+            logger.warning("Failed to schedule verification: %s", e)
+
+    async def _verify_listing(
+        self,
+        item_id: int,
+        auction_id: str,
+        sku: str,
+        expected_price: int,
+        action_type: str,
+    ) -> None:
+        """One-shot job: verify Amazon listing after auto-action."""
+        from ..amazon import AmazonApiError
+        from ..main import app_state
+
+        sp_client = app_state.get("sp_api")
+        if not sp_client:
+            return
+
+        seller_id = settings.sp_api_seller_id
+        db: Session = SessionLocal()
+        try:
+            try:
+                listing_data = await sp_client.get_listing(seller_id, sku)
+            except AmazonApiError as e:
+                logger.warning("Verification: get_listing failed for SKU=%s: %s", sku, e)
+                await self._notify_verification_result(
+                    auction_id, sku, expected_price, action_type,
+                    success=False, detail=f"API取得失敗: {e}",
+                )
+                return
+
+            if not listing_data:
+                await self._notify_verification_result(
+                    auction_id, sku, expected_price, action_type,
+                    success=False, detail="出品が見つかりません",
+                )
+                return
+
+            # Extract actual price (same pattern as ListingSyncChecker)
+            actual_price = None
+            try:
+                summaries = listing_data.get("summaries") or []
+                for summary in summaries:
+                    price_info = summary.get("price")
+                    if price_info:
+                        amount = price_info.get("amount")
+                        if amount is not None:
+                            actual_price = int(float(amount))
+                            break
+                if actual_price is None:
+                    attributes = listing_data.get("attributes") or {}
+                    our_price = attributes.get("purchasable_offer") or attributes.get("our_price")
+                    if our_price and isinstance(our_price, list):
+                        for price_entry in our_price:
+                            schedule = price_entry.get("schedule") or []
+                            for s in schedule:
+                                val = s.get("value_with_tax") or s.get("value")
+                                if val is not None:
+                                    actual_price = int(float(val))
+                                    break
+                            if actual_price is not None:
+                                break
+            except (KeyError, TypeError, ValueError) as e:
+                logger.debug("Verification: could not extract price: %s", e)
+
+            price_ok = actual_price is not None and actual_price == expected_price
+
+            if price_ok:
+                detail = f"価格 ¥{actual_price:,}"
+                await self._notify_verification_result(
+                    auction_id, sku, expected_price, action_type,
+                    success=True, detail=detail,
+                )
+                item = db.query(MonitoredItem).filter(MonitoredItem.id == item_id).first()
+                if item:
+                    item.amazon_last_synced_at = datetime.now(timezone.utc)
+                    db.commit()
+            else:
+                actual_str = f"¥{actual_price:,}" if actual_price else "取得不可"
+                detail = f"価格不一致: 期待 ¥{expected_price:,} → 実際 {actual_str}"
+                await self._notify_verification_result(
+                    auction_id, sku, expected_price, action_type,
+                    success=False, detail=detail,
+                )
+
+        except Exception as e:
+            logger.exception("Verification error for SKU=%s: %s", sku, e)
+        finally:
+            db.close()
+
+    async def _notify_verification_result(
+        self,
+        auction_id: str,
+        sku: str,
+        expected_price: int,
+        action_type: str,
+        *,
+        success: bool,
+        detail: str,
+    ) -> None:
+        """Send Discord notification with verification result."""
+        from ..notifier.webhook import send_webhook
+
+        webhook_url = settings.webhook_url
+        if not webhook_url:
+            return
+
+        action_label = "再出品" if action_type == "relist" else "価格同期"
+        icon = "\u2713" if success else "\u2717"
+        status_text = "確認完了" if success else "確認失敗"
+
+        payload = {
+            "embeds": [{
+                "title": f"{icon} {action_label}{status_text}",
+                "url": f"https://yafuama.fly.dev/items/{auction_id}",
+                "color": 0x00CC66 if success else 0xFF4444,
+                "fields": [
+                    {"name": "SKU", "value": sku, "inline": True},
+                    {"name": "詳細", "value": detail, "inline": True},
+                ],
+                "footer": {"text": "ヤフアマ | Amazon出品確認"},
+            }],
+        }
+        try:
+            await send_webhook(webhook_url, payload, webhook_type=settings.webhook_type)
+        except Exception as e:
+            logger.warning("Verification webhook failed: %s", e)
 
     async def _retry_failed_amazon_deletions(self) -> None:
         """Retry Amazon listing deletion for ended items where deletion failed.

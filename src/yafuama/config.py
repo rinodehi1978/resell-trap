@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     relist_check_max_days: int = 3          # 終了後の最大監視日数
     relist_min_margin_pct: float = 25.0     # 再出品の最低粗利率 (%)
     relist_min_profit: int = 3000           # 再出品の最低粗利益 (円)
+    relist_auto_enabled: bool = True        # 自動再出品を有効化
+
+    # Yahoo → Amazon 価格自動同期
+    price_sync_enabled: bool = True         # Yahoo即決価格変更時にAmazon価格も自動更新
+
+    # 反映確認
+    verification_delay_seconds: int = 30    # 自動アクション後の確認待機秒数
 
     # Series Expansion（型番シリーズ横展開）
     series_expansion_min_profit: int = 3000       # シリーズ展開トリガーの最低粗利益（円）
