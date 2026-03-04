@@ -475,6 +475,9 @@ class DealScanner:
         if deal.gross_profit >= settings.series_expansion_min_profit:
             await self._enqueue_series_candidates(deal, kw, db)
 
+        # ディールから型番を自動抽出 → WatchedKeywordに登録
+        self._extract_and_register_models(deal, kw, db)
+
         return {
             "yahoo_title": deal.yahoo_title,
             "yahoo_price": deal.yahoo_price,
@@ -482,6 +485,48 @@ class DealScanner:
             "gross_profit": deal.gross_profit,
             "gross_margin_pct": deal.gross_margin_pct,
         }
+
+    def _extract_and_register_models(self, deal, kw: WatchedKeyword, db) -> None:
+        """ディール発見時にAmazonタイトルから型番を抽出し、WatchedKeywordに自動登録。
+
+        汎用キーワード（オーブンレンジ等）から具体的な型番キーワードを生み出す。
+        """
+        amazon_title = deal.amazon_title or ""
+        if not amazon_title:
+            return
+
+        models = extract_model_numbers_from_text(amazon_title)
+        for model in models:
+            if not is_valid_model(model):
+                continue
+            if _is_barcode(model):
+                continue
+            # Already exists?
+            existing = (
+                db.query(WatchedKeyword)
+                .filter(WatchedKeyword.keyword == model)
+                .first()
+            )
+            if existing:
+                continue
+            new_kw = WatchedKeyword(
+                keyword=model,
+                is_active=True,
+                source="deal_extract",
+                parent_keyword_id=kw.id,
+                confidence=0.8,
+                notes=f"Extracted from deal: {deal.amazon_asin}",
+            )
+            try:
+                nested = db.begin_nested()
+                db.add(new_kw)
+                db.flush()
+                logger.info(
+                    "Auto-registered model keyword '%s' from deal %s (parent: %s)",
+                    model, deal.amazon_asin, kw.keyword,
+                )
+            except IntegrityError:
+                nested.rollback()
 
     # ── Main scan loop ────────────────────────────────────────────────
 
@@ -520,7 +565,7 @@ class DealScanner:
                 db.query(WatchedKeyword)
                 .filter(
                     WatchedKeyword.is_active == True,  # noqa: E712
-                    WatchedKeyword.source.in_(["manual", "ai_demand", "ai_series"]),
+                    WatchedKeyword.source.in_(["manual", "ai_demand", "ai_series", "deal_extract"]),
                 )
                 .order_by(
                     WatchedKeyword.last_scanned_at.is_(None).desc(),
