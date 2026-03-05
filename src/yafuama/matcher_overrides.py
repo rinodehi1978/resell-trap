@@ -19,7 +19,6 @@ class MatcherOverrides:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._extra_accessory_words: frozenset[str] = frozenset()
-        self._blocked_pairs: set[str] = set()  # blocked ASINs
         self._never_show_pairs: set[tuple[str, str]] = set()  # (yahoo_title, amazon_title)
         self._threshold_adjustment: float = 0.0
 
@@ -41,19 +40,12 @@ class MatcherOverrides:
             )
 
             accessory: set[str] = set()
-            blocked_pairs: set[tuple[str, str]] = set()
             never_show_pairs: set[tuple[str, str]] = set()
             threshold_adj = 0.0
 
             for p in patterns:
                 if p.pattern_type == "accessory_word" and p.hit_count >= 1:
                     accessory.add(p.pattern_key)
-
-                elif p.pattern_type == "problem_pair":
-                    parts = p.pattern_key.split(":", 1)
-                    if len(parts) == 2:
-                        # Block by ASIN (auction_id is unique per listing, ASIN persists)
-                        blocked_pairs.add(parts[1])
 
                 elif p.pattern_type == "never_show_pair":
                     data = _safe_json(p.pattern_data)
@@ -68,14 +60,13 @@ class MatcherOverrides:
 
             with self._lock:
                 self._extra_accessory_words = frozenset(accessory)
-                self._blocked_pairs = blocked_pairs
                 self._never_show_pairs = never_show_pairs
                 self._threshold_adjustment = threshold_adj
 
             logger.info(
-                "Matcher overrides reloaded: %d accessory words, %d blocked pairs, "
+                "Matcher overrides reloaded: %d accessory words, "
                 "%d never-show pairs, threshold adj=%.3f",
-                len(accessory), len(blocked_pairs), len(never_show_pairs), threshold_adj,
+                len(accessory), len(never_show_pairs), threshold_adj,
             )
         except Exception:
             logger.exception("Failed to reload matcher overrides")
@@ -86,12 +77,6 @@ class MatcherOverrides:
     def extra_accessory_words(self) -> frozenset[str]:
         with self._lock:
             return self._extra_accessory_words
-
-    @property
-    def blocked_pairs(self) -> set[str]:
-        """Set of blocked ASINs (learned from problem_pair rejections)."""
-        with self._lock:
-            return set(self._blocked_pairs)
 
     @property
     def never_show_pairs(self) -> set[tuple[str, str]]:

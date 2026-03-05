@@ -1024,13 +1024,9 @@ class DealScanner:
             if self._is_book_asin(_kp_asin):
                 continue
 
-            # Check rejection-learned blocked ASINs and never-show pairs
+            # 「二度と出すな」: Yahoo title + Amazon title ペアをチェック
             try:
                 from ..matcher_overrides import overrides
-                _kp_asin = kp.get("asin", "")
-                if _kp_asin in overrides.blocked_pairs:
-                    continue
-                # 「二度と出すな」: Yahoo title + Amazon title ペアをチェック
                 if (yahoo_title, amazon_title) in overrides.never_show_pairs:
                     continue
             except ImportError:
