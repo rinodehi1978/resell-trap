@@ -592,7 +592,7 @@ function _renderSuggestionPopover(pop, alertId, data) {
   html += '</div>';
   html += '<div class="border-t border-gray-100 my-1.5"></div>';
   html += `<button class="w-full px-2 py-1 text-xs bg-red-100 text-red-800 rounded hover:bg-red-200 text-left font-bold" onclick="rejectAlert(${alertId}, 'never_show', this)">二度と出すな</button>`;
-  html += `<button class="mt-1 w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="deleteAlertClean(${alertId}, this)">出品終了（学習なし削除）</button>`;
+  html += `<button class="mt-1 w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="markAlertListed(${alertId}, this)">出品済み</button>`;
   html += '<button class="mt-1.5 w-full px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-600" onclick="this.closest(\'.delete-confirm-pop\').remove()">キャンセル</button>';
   pop.innerHTML = html;
 }
@@ -609,7 +609,7 @@ function _renderStaticPopover(pop, alertId) {
     </div>
     <div class="border-t border-gray-100 my-1.5"></div>
     <button class="w-full px-2 py-1 text-xs bg-red-100 text-red-800 rounded hover:bg-red-200 text-left font-bold" onclick="rejectAlert(${alertId}, 'never_show', this)">二度と出すな</button>
-    <button class="mt-1 w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="deleteAlertClean(${alertId}, this)">出品終了（学習なし削除）</button>
+    <button class="mt-1 w-full px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-left" onclick="markAlertListed(${alertId}, this)">出品済み</button>
     <button class="mt-1.5 w-full px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-600" onclick="this.closest('.delete-confirm-pop').remove()">キャンセル</button>
   `;
 }
@@ -620,11 +620,11 @@ function _escHtml(str) {
   return d.innerHTML;
 }
 
-async function deleteAlertClean(alertId, triggerBtn) {
+async function markAlertListed(alertId, triggerBtn) {
   if (triggerBtn) { triggerBtn.textContent = '...'; triggerBtn.disabled = true; }
   try {
-    const resp = await fetch('/api/keywords/alerts/' + alertId, {method: 'DELETE'});
-    if (!resp.ok && resp.status !== 204) throw new Error('削除に失敗');
+    const resp = await fetch('/api/keywords/alerts/' + alertId + '/mark-listed', {method: 'POST'});
+    if (!resp.ok) throw new Error('更新に失敗');
     const pop = triggerBtn?.closest('.delete-confirm-pop');
     if (pop) pop.remove();
     const row = document.getElementById('alert-row-' + alertId);

@@ -214,6 +214,26 @@ def delete_alert(alert_id: int, db: Session = Depends(get_db)):
                 raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
 
+@router.post("/alerts/{alert_id}/mark-listed", status_code=200)
+def mark_alert_listed(alert_id: int, db: Session = Depends(get_db)):
+    """Mark a deal alert as listed (manual listing, no rejection learning)."""
+    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    alert.status = "listed"
+    for attempt in range(3):
+        try:
+            db.commit()
+            return {"ok": True, "id": alert_id}
+        except OperationalError:
+            db.rollback()
+            if attempt < 2:
+                time.sleep(1)
+                alert.status = "listed"
+            else:
+                raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
+
+
 @router.post("/alerts/{alert_id}/list", status_code=201)
 async def list_from_deal(
     alert_id: int,
