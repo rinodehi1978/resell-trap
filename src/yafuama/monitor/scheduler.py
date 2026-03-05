@@ -230,7 +230,8 @@ class MonitorScheduler:
         item.updated_at = datetime.now(timezone.utc)
 
         # Sync DealAlert prices when Yahoo price changes
-        if data.win_price and data.win_price != old_win_price:
+        # Skip if old_win_price is 0 (initial scrape, not a real change)
+        if data.win_price and data.win_price != old_win_price and old_win_price != 0:
             self._sync_deal_alert_prices(item.auction_id, data.win_price, db)
             # Auto-sync Amazon price
             price_synced = await self._auto_sync_amazon_price(
