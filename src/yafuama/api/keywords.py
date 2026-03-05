@@ -294,6 +294,7 @@ async def list_from_deal(
             image_url=alert.yahoo_image_url or "",
             current_price=alert.yahoo_price,
             buy_now_price=alert.yahoo_price,
+            win_price=alert.yahoo_price,
         )
         db.add(item)
         db.flush()  # Get item.id
