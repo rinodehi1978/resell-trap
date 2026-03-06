@@ -186,6 +186,7 @@ class AmazonListingCreate(BaseModel):
     condition: str = "used_very_good"  # used_like_new / used_very_good / used_good / used_acceptable
     estimated_win_price: int = 0
     shipping_cost: int = 0
+    forwarding_cost: int = 0  # 転送料（サイズ別）
     margin_pct: float | None = None
     lead_time_days: int = 4  # Amazon lead_time_to_ship_max_days (days)
     shipping_pattern: str = "2_3_days"  # "1_2_days" / "2_3_days" / "3_7_days"

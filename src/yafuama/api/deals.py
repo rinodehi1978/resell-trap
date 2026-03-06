@@ -210,7 +210,7 @@ async def list_from_deal(
     yahoo_shipping = getattr(alert, "yahoo_shipping", 0) or 0
     estimated_price = alert.yahoo_price
     shipping = yahoo_shipping or settings.sp_api_default_shipping_cost
-    forwarding = alert.forwarding_cost if alert.forwarding_cost > 0 else settings.deal_forwarding_cost
+    forwarding = body.get("forwarding_cost") or (alert.forwarding_cost if alert.forwarding_cost > 0 else settings.deal_forwarding_cost)
     margin = settings.sp_api_default_margin_pct
     amazon_price = body.get("price") or calculate_amazon_price(
         estimated_price, shipping, forwarding_cost=forwarding, margin_pct=margin
@@ -276,7 +276,7 @@ async def list_from_deal(
     item.amazon_price = amazon_price
     item.estimated_win_price = estimated_price
     item.shipping_cost = alert.yahoo_shipping or 0
-    item.forwarding_cost = alert.forwarding_cost if alert.forwarding_cost > 0 else settings.deal_forwarding_cost
+    item.forwarding_cost = forwarding
     item.amazon_fee_pct = alert.amazon_fee_pct if alert.amazon_fee_pct > 0 else settings.deal_amazon_fee_pct
     item.amazon_margin_pct = alert.gross_margin_pct if alert.gross_margin_pct > 0 else margin
     item.amazon_lead_time_days = lead_time

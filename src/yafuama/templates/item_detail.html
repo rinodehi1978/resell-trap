@@ -411,7 +411,19 @@
           <div>
             <div class="text-[10px] font-medium text-gray-500 mb-1">Amazon経費</div>
             <div class="flex items-center gap-3 text-xs text-gray-600">
-              <span>転送: <span class="font-semibold">¥{{ "{:,}".format(item.forwarding_cost) }}</span></span>
+              <span class="flex items-center gap-1">転送:
+                <select id="rm-forwarding-select" class="text-xs border rounded px-1 py-0.5 font-semibold bg-white"
+                        onchange="rmCalcProfit()">
+                  <option value="735" {% if item.forwarding_cost == 735 %}selected{% endif %}>60サイズ ¥735</option>
+                  <option value="840" {% if item.forwarding_cost == 840 %}selected{% endif %}>80サイズ ¥840</option>
+                  <option value="960" {% if item.forwarding_cost == 960 %}selected{% endif %}>100サイズ ¥960</option>
+                  <option value="1150" {% if item.forwarding_cost == 1150 %}selected{% endif %}>120サイズ ¥1,150</option>
+                  <option value="1340" {% if item.forwarding_cost == 1340 or not item.forwarding_cost %}selected{% endif %}>140サイズ ¥1,340</option>
+                  <option value="1810" {% if item.forwarding_cost == 1810 %}selected{% endif %}>160サイズ ¥1,810</option>
+                  <option value="3060" {% if item.forwarding_cost == 3060 %}selected{% endif %}>180サイズ ¥3,060</option>
+                  <option value="3810" {% if item.forwarding_cost == 3810 %}selected{% endif %}>200サイズ ¥3,810</option>
+                </select>
+              </span>
               <span>利用料: <span class="font-semibold">¥100</span></span>
               <span>手数料: <span class="font-semibold">{{ item.amazon_fee_pct }}%</span></span>
             </div>
@@ -645,7 +657,7 @@ function rmCalcProfit() {
   const price = parseInt(document.getElementById('rm-price').value) || 0;
   const shipping = parseInt(document.getElementById('rm-shipping').value) || 0;
   const yahooPrice = _rmData.yahooPrice;
-  const fwd = _rmData.forwardingCost;
+  const fwd = parseInt(document.getElementById('rm-forwarding-select').value) || 0;
   const feePct = _rmData.feePct;
   const amazonFee = Math.round(price * feePct / 100);
   const totalCost = yahooPrice + shipping + fwd + 100 + amazonFee;
@@ -742,11 +754,13 @@ async function submitRelist() {
   msgEl.textContent = '';
 
   try {
+    const forwardingCost = parseInt(document.getElementById('rm-forwarding-select').value) || 0;
     const body = {
       condition: condition,
       price: price,
       estimated_win_price: _rmData.yahooPrice,
       shipping_cost: shippingCost,
+      forwarding_cost: forwardingCost,
       shipping_pattern: shippingPattern,
     };
     if (conditionNote) body.condition_note = conditionNote;

@@ -179,7 +179,7 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     sku = body.sku or generate_sku(body.auction_id)
     margin = body.margin_pct if body.margin_pct is not None else settings.sp_api_default_margin_pct
     shipping = body.shipping_cost or settings.sp_api_default_shipping_cost
-    forwarding = getattr(body, "forwarding_cost", 0) or item.forwarding_cost or settings.deal_forwarding_cost
+    forwarding = body.forwarding_cost or item.forwarding_cost or settings.deal_forwarding_cost
     estimated = body.estimated_win_price or item.current_price
 
     price = calculate_amazon_price(estimated, shipping, forwarding_cost=forwarding, margin_pct=margin)
@@ -440,11 +440,13 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
     sku = f"{generate_sku(auction_id)}-R{suffix}"
 
-    # body で仕入れ価格・送料が更新された場合、itemにも反映
+    # body で仕入れ価格・送料・転送料が更新された場合、itemにも反映
     if body.get("estimated_win_price"):
         item.estimated_win_price = body["estimated_win_price"]
     if "shipping_cost" in body:
         item.shipping_cost = body["shipping_cost"]
+    if body.get("forwarding_cost"):
+        item.forwarding_cost = body["forwarding_cost"]
 
     price = body.get("price") or item.amazon_price or calculate_amazon_price(
         item.estimated_win_price, item.shipping_cost,
