@@ -786,9 +786,10 @@ _ACCESSORY_WORDS = frozenset({
     "ばってりー", "battery", "でんち", "電池",
     "充電器", "じゅうでんき", "充電", "じゅうでん",
     "acあだぷたー", "電源", "でんげん",
-    # Replacement / spare
+    # Replacement / spare / boards
     "交換", "こうかん", "替え", "かえ", "すぺあ", "spare",
     "部品", "ぶひん", "ぱーつ", "parts", "part",
+    "基板", "きばん", "基盤",
     # Straps / holders
     "すとらっぷ", "strap", "ほるだー", "holder", "くりっぷ", "clip",
     # Caps / tips
