@@ -37,6 +37,20 @@ def _is_barcode(text: str) -> bool:
 class DealScanner:
     """Scans Product Finder products against Yahoo Auctions for profitable deals."""
 
+    # Amazon.co.jp ルートカテゴリ（無在庫転売に適したカテゴリをローテーション）
+    _PF_CATEGORIES = [
+        (3210981, "家電＆カメラ"),
+        (2016929051, "DIY・工具・ガーデン"),
+        (13299531, "おもちゃ"),
+        (2277721051, "ホビー"),
+        (2123629051, "楽器・音響機器"),
+        (3828871, "ホーム＆キッチン"),
+        (14304371, "スポーツ＆アウトドア"),
+        (2127209051, "パソコン・周辺機器"),
+        (86731051, "文房具・オフィス用品"),
+        (2277724051, "大型家電"),
+    ]
+
     def __init__(
         self,
         scraper,
@@ -51,6 +65,7 @@ class DealScanner:
         self._webhook_type = webhook_type
         self._sp_api = sp_api_client
         self._pf_cache: tuple[float, list[dict]] | None = None
+        self._category_index: int = 0  # カテゴリローテーション用
 
     # ── Helper methods ─────────────────────────────────────────────────
 
@@ -225,7 +240,7 @@ class DealScanner:
     # ── Product Finder pipeline ────────────────────────────────────────
 
     async def _get_pf_products(self) -> list[dict]:
-        """Fetch products from Keepa Product Finder with caching."""
+        """Fetch products from Keepa Product Finder with category rotation."""
         now = monotonic()
 
         # Return cached if still valid
@@ -241,9 +256,14 @@ class DealScanner:
             logger.warning("Keepa tokens low (%s), skipping Product Finder", tokens)
             return []
 
+        # カテゴリローテーション: 毎回違うカテゴリを検索
+        cat_id, cat_name = self._PF_CATEGORIES[self._category_index % len(self._PF_CATEGORIES)]
+        self._category_index += 1
+
         try:
             products = await self._keepa.product_finder(
                 selection={
+                    "rootCategory": cat_id,
                     "salesRankDrops90_gte": settings.demand_finder_min_drops90,
                     "current_USED_gte": settings.demand_finder_min_used_price,
                     "perPage": settings.demand_finder_max_results,
@@ -251,10 +271,11 @@ class DealScanner:
                 stats=settings.keepa_default_stats_days,
             )
         except Exception as e:
-            logger.warning("Product Finder failed: %s", e)
+            logger.warning("Product Finder failed (%s): %s", cat_name, e)
             return []
 
         if not products:
+            logger.info("Product Finder: 0 products in %s", cat_name)
             return []
 
         # Filter: exclude products where used >= new (overpriced used)
@@ -269,7 +290,7 @@ class DealScanner:
             filtered.append(p)
 
         self._pf_cache = (now, filtered)
-        logger.info("Product Finder: %d products (%d after filter)", len(products), len(filtered))
+        logger.info("Product Finder [%s]: %d products (%d after filter)", cat_name, len(products), len(filtered))
         return filtered
 
     async def _scan_pf_deals(self, products: list[dict], db) -> int:

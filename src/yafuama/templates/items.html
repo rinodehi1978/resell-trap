@@ -101,6 +101,15 @@
           </span>
           {% endif %}
         </div>
+        {# コスト内訳 #}
+        {% if sell_price > 0 %}
+        <div class="flex flex-wrap gap-x-3 mt-0.5 text-[10px] text-gray-400">
+          {% if item.shipping_cost %}<span>送料 &yen;{{ "{:,}".format(item.shipping_cost) }}</span>{% endif %}
+          <span>転送 &yen;{{ "{:,}".format(item.forwarding_cost) }}</span>
+          <span>利用料 &yen;100</span>
+          <span>手数料({{ item.amazon_fee_pct }}%) &yen;{{ "{:,}".format(amazon_fee) }}</span>
+        </div>
+        {% endif %}
       </div>
 
       {# 右側: 削除ボタン #}
