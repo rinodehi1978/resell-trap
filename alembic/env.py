@@ -14,9 +14,8 @@ from yafuama.config import settings  # noqa: E402
 from yafuama.database import Base  # noqa: E402
 from yafuama.models import (  # noqa: E402, F401
     MonitoredItem, StatusHistory, NotificationLog,
-    WatchedKeyword, DealAlert, KeywordCandidate,
-    DiscoveryLog, ConditionTemplate, ListingPreset,
-    AmazonOrder, RejectionPattern,
+    DealAlert, ConditionTemplate, ListingPreset,
+    AmazonOrder,
 )
 
 config = context.config

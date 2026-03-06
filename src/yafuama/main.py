@@ -93,18 +93,6 @@ async def lifespan(app: FastAPI):
         scheduler.add_deal_scan_job(deal_scanner, settings.deal_scan_interval)
         logger.info("Deal scanner enabled (interval=%ds)", settings.deal_scan_interval)
 
-        # AI Discovery engine (requires Keepa + deal_scanner)
-        if settings.discovery_enabled:
-            from .ai.engine import DiscoveryEngine
-
-            discovery_engine = DiscoveryEngine(
-                scraper, keepa_client,
-                anthropic_api_key=settings.anthropic_api_key,
-            )
-            app_state["discovery_engine"] = discovery_engine
-            scheduler.add_discovery_job(discovery_engine, settings.discovery_interval)
-            logger.info("AI Discovery engine enabled (interval=%ds)", settings.discovery_interval)
-
     # Amazon listing sync (detect deletions from Seller Central)
     if "sp_api" in app_state:
         from .amazon.listing_sync import ListingSyncChecker
@@ -128,13 +116,6 @@ async def lifespan(app: FastAPI):
             "Amazon order monitor enabled (interval=%ds)",
             settings.order_monitor_interval,
         )
-
-    # Load matcher overrides from rejection patterns
-    try:
-        from .matcher_overrides import overrides as matcher_overrides
-        matcher_overrides.reload()
-    except Exception as e:
-        logger.warning("Failed to load matcher overrides: %s", e)
 
     logger.info("ヤフアマ started")
 

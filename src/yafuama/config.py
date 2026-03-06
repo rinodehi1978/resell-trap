@@ -56,34 +56,15 @@ class Settings(BaseSettings):
     deal_amazon_fee_pct: float = 10.0     # Amazon販売手数料率 (%)
     deal_min_gross_margin_pct: float = 25.0  # 最低粗利率 (%)
     deal_max_gross_margin_pct: float = 999.0  # 粗利率上限なし（型番一致で精度担保）
-    deal_strict_margin_pct: float = 50.0   # この粗利率以上はマッチング厳格化
     deal_min_gross_profit: int = 3000     # 最低粗利益 (円)
     deal_scan_interval: int = 1800        # 自動スキャン間隔 (秒、30分)
     deal_default_shipping: int = 700        # 送料不明時のデフォルト送料 (円)
     deal_scan_max_pages: int = 2           # Yahoo検索の最大ページ数
-    deal_max_keepa_searches_per_keyword: int = 1  # キーワードあたりの最大Keepa個別検索数
-    deal_min_price_for_keepa_search: int = 2000    # 個別Keepa検索の最低即決価格（円）
-    # 深層検証（利益率50%超の候補をヤフオク説明文で再検証）
-    # NOTE: enabled/max_per_cycleは将来実装予定（現在はmargin_thresholdのみ使用）
     deal_dedup_hours: int = 24             # 同一ASIN重複排除の時間窓（時間）
-    deal_deep_validation_enabled: bool = True
-    deal_deep_validation_max_per_cycle: int = 10
-    deal_deep_validation_margin_threshold: float = 50.0
 
     @property
     def keepa_enabled(self) -> bool:
         return bool(self.keepa_api_key)
-
-    # AI Discovery
-    discovery_enabled: bool = True
-    discovery_interval: int = 3600           # Discovery cycle interval (seconds, default 1h)
-    discovery_token_budget: int = 10         # Max Keepa tokens per discovery cycle
-    discovery_min_deals: int = 5             # Min DealAlerts before AI starts generating
-    discovery_auto_add_threshold: float = 0.6  # Confidence threshold for auto-adding
-    discovery_max_ai_keywords: int = 20      # Cap on active AI keywords
-    discovery_deactivation_scans: int = 10   # Scans before deactivation check
-    discovery_deactivation_threshold: float = 0.15  # Score below which to deactivate
-    anthropic_api_key: str = ""              # Claude API key (optional)
 
     # Auto-relist detection（自動再出品検知）
     relist_check_enabled: bool = True
@@ -99,13 +80,7 @@ class Settings(BaseSettings):
     # 反映確認
     verification_delay_seconds: int = 30    # 自動アクション後の確認待機秒数
 
-    # Series Expansion（型番シリーズ横展開）— 無効化済み
-    series_expansion_min_profit: int = 3000       # シリーズ展開トリガーの最低粗利益（円）
-    series_expansion_max_siblings: int = 4        # 1型番あたりの最大兄弟生成数
-    series_expansion_max_per_cycle: int = 0       # 0=無効（Amazon起点に集約）
-
-    # Demand Discovery（需要ベースキーワード発見）
-    demand_finder_enabled: bool = True
+    # Demand Discovery（Product Finder フィルタ）
     demand_finder_min_drops90: int = 1        # 過去3ヶ月で1個以上売れていればOK
     demand_finder_min_used_price: int = 10000 # 中古最低価格（円）
     demand_finder_max_results: int = 50       # Product Finder最大取得件数
@@ -113,15 +88,6 @@ class Settings(BaseSettings):
     # Product Finder Deal Scanner（Amazon起点スキャン）
     pf_cache_ttl: int = 1800                 # Product Finder結果キャッシュTTL（秒、30分）
     pf_max_yahoo_searches: int = 30          # 1サイクルあたりのYahoo検索上限
-
-    # Suggest Cross-Match（Amazon/Yahooサジェストクロスマッチ）
-    suggest_crossmatch_enabled: bool = True
-    suggest_max_seeds: int = 10              # 1サイクルあたりの最大シードブランド数
-    suggest_max_candidates: int = 15         # 1サイクルあたりの最大候補数
-
-    @property
-    def anthropic_enabled(self) -> bool:
-        return bool(self.anthropic_api_key)
 
     # S3 Image Proxy (Yahoo画像→S3→Amazon)
     s3_image_bucket: str = ""  # S3バケット名（空ならS3アップロード無効）

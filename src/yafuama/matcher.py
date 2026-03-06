@@ -845,13 +845,6 @@ def _has_accessory_words(tokens: list[str]) -> bool:
     # Fast path: exact match
     if token_set & _ACCESSORY_WORDS:
         return True
-    # Dynamic learned accessory words
-    try:
-        from .matcher_overrides import overrides
-        if token_set & overrides.extra_accessory_words:
-            return True
-    except ImportError:
-        pass
     # Suffix + guarded prefix match for compounds
     for t in tokens:
         if len(t) < 4:

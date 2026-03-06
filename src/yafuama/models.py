@@ -101,34 +101,6 @@ class NotificationLog(Base):
     item: Mapped["MonitoredItem"] = relationship(back_populates="notifications")
 
 
-class WatchedKeyword(Base):
-    __tablename__ = "watched_keywords"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    keyword: Mapped[str] = mapped_column(Text, unique=True, index=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
-    notes: Mapped[str] = mapped_column(Text, default="")
-
-    # AI Discovery fields
-    source: Mapped[str] = mapped_column(Text, default="manual")
-    # "manual" | "product_finder" | "ai_brand" | "ai_title" | "ai_category" | "ai_synonym" | "ai_llm"
-    parent_keyword_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("watched_keywords.id"), nullable=True
-    )
-    performance_score: Mapped[float] = mapped_column(Float, default=0.0)
-    total_scans: Mapped[int] = mapped_column(Integer, default=0)
-    total_deals_found: Mapped[int] = mapped_column(Integer, default=0)
-    total_gross_profit: Mapped[int] = mapped_column(Integer, default=0)
-    scans_since_last_deal: Mapped[int] = mapped_column(Integer, default=0)
-    confidence: Mapped[float] = mapped_column(Float, default=1.0)
-    auto_deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    alerts: Mapped[list["DealAlert"]] = relationship(back_populates="keyword", cascade="all, delete-orphan")
-
-
 class DealAlert(Base):
     __tablename__ = "deal_alerts"
     __table_args__ = (
@@ -136,7 +108,8 @@ class DealAlert(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    keyword_id: Mapped[int] = mapped_column(Integer, ForeignKey("watched_keywords.id"), index=True)
+    keyword_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    search_keyword: Mapped[str] = mapped_column(Text, default="")
     yahoo_auction_id: Mapped[str] = mapped_column(Text, index=True)
     amazon_asin: Mapped[str] = mapped_column(Text, index=True)
     yahoo_title: Mapped[str] = mapped_column(Text, default="")
@@ -158,46 +131,6 @@ class DealAlert(Base):
     # "wrong_product" | "accessory" | "model_variant" | "bad_price" | "other"
     rejection_note: Mapped[str] = mapped_column(Text, default="")
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    keyword: Mapped["WatchedKeyword"] = relationship(back_populates="alerts")
-
-
-class KeywordCandidate(Base):
-    __tablename__ = "keyword_candidates"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    keyword: Mapped[str] = mapped_column(Text, index=True)
-    strategy: Mapped[str] = mapped_column(Text, default="")
-    # "brand" | "title" | "category" | "synonym" | "llm"
-    confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    parent_keyword_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("watched_keywords.id"), nullable=True
-    )
-    reasoning: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(Text, default="pending")
-    # "pending" | "validated" | "auto_added" | "approved" | "rejected"
-    validation_result: Mapped[str] = mapped_column(Text, default="")
-    # JSON: {"yahoo_count": 15, "keepa_count": 3, "best_margin": 52.0, "best_profit": 4500}
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class DiscoveryLog(Base):
-    __tablename__ = "discovery_log"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(Text, default="running")
-    # "running" | "completed" | "error"
-    candidates_generated: Mapped[int] = mapped_column(Integer, default=0)
-    candidates_validated: Mapped[int] = mapped_column(Integer, default=0)
-    keywords_added: Mapped[int] = mapped_column(Integer, default=0)
-    keywords_deactivated: Mapped[int] = mapped_column(Integer, default=0)
-    keepa_tokens_used: Mapped[int] = mapped_column(Integer, default=0)
-    strategy_breakdown: Mapped[str] = mapped_column(Text, default="{}")
-    # JSON: {"brand": 3, "title": 5, "category": 2}
-    error_message: Mapped[str] = mapped_column(Text, default="")
 
 
 class ConditionTemplate(Base):
@@ -239,19 +172,3 @@ class AmazonOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
-class RejectionPattern(Base):
-    __tablename__ = "rejection_patterns"
-    __table_args__ = (
-        UniqueConstraint("pattern_type", "pattern_key", name="uq_rejection_pattern"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    pattern_type: Mapped[str] = mapped_column(Text, index=True)
-    # "accessory_word" | "problem_pair" | "model_conflict" | "blocked_asin" | "threshold_hint"
-    pattern_key: Mapped[str] = mapped_column(Text, default="")
-    pattern_data: Mapped[str] = mapped_column(Text, default="{}")
-    hit_count: Mapped[int] = mapped_column(Integer, default=1)
-    confidence: Mapped[float] = mapped_column(Float, default=0.5)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

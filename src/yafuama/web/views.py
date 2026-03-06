@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..matcher import is_apparel, match_products
-from ..models import AmazonOrder, DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem, NotificationLog, StatusHistory, WatchedKeyword
+from ..models import AmazonOrder, DealAlert, MonitoredItem, NotificationLog, StatusHistory
 
 logger = logging.getLogger(__name__)
 
@@ -62,20 +62,11 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     # Deal scanner stats
     scanner = app_state.get("deal_scanner")
     keepa = app_state.get("keepa")
-    active_keywords = db.query(WatchedKeyword).filter(WatchedKeyword.is_active == True).count()  # noqa: E712
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     deals_today = db.query(DealAlert).filter(DealAlert.notified_at >= today_start).count()
-    last_scan = (
-        db.query(WatchedKeyword.last_scanned_at)
-        .filter(WatchedKeyword.last_scanned_at.isnot(None))
-        .order_by(WatchedKeyword.last_scanned_at.desc())
-        .first()
-    )
     scanner_stats = {
         "enabled": scanner is not None,
-        "active_keywords": active_keywords,
         "deals_today": deals_today,
-        "last_scan": last_scan[0] if last_scan else None,
         "keepa_tokens": getattr(keepa, "tokens_left_display", None) if keepa else None,
     }
 
@@ -86,25 +77,6 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         .limit(5)
         .all()
     )
-
-    # Discovery stats for dashboard
-    discovery_logs = (
-        db.query(DiscoveryLog)
-        .filter(DiscoveryLog.status == "completed")
-        .order_by(DiscoveryLog.id.desc())
-        .limit(24)
-        .all()
-    )
-    discovery_logs.reverse()  # oldest first for chart
-    ai_keyword_count = db.query(WatchedKeyword).filter(WatchedKeyword.source != "manual").count()
-    pending_candidates = db.query(KeywordCandidate).filter(
-        KeywordCandidate.status.in_(["pending", "validated"])
-    ).count()
-    discovery_stats = {
-        "ai_keywords": ai_keyword_count,
-        "pending_candidates": pending_candidates,
-        "logs": discovery_logs,
-    }
 
     # Sales summary (this month's Amazon orders)
     month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -129,7 +101,6 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "scheduler_running": scheduler is not None and scheduler.running,
         "scanner_stats": scanner_stats,
         "recent_deals": recent_deals,
-        "discovery_stats": discovery_stats,
         "order_stats": order_stats,
     })
 
@@ -226,15 +197,11 @@ def deals_page(request: Request):
 def keywords_page(request: Request, db: Session = Depends(get_db)):
     from ..main import app_state
 
-    keywords = db.query(WatchedKeyword).order_by(WatchedKeyword.created_at.desc()).all()
-    # Attach alert counts
-    for kw in keywords:
-        kw.alert_count = db.query(DealAlert).filter(DealAlert.keyword_id == kw.id).count()
     recent_alerts = (
         db.query(DealAlert)
         .filter(DealAlert.status.in_(["active", "listed"]))
         .order_by(DealAlert.notified_at.desc())
-        .limit(20)
+        .limit(50)
         .all()
     )
     # Mark alerts that are already monitored
@@ -282,7 +249,6 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("keywords.html", {
         "request": request,
         "active_page": "keywords",
-        "keywords": keywords,
         "recent_alerts": recent_alerts,
         "scanner_available": scanner is not None,
         "monitored_items": monitored_items,
@@ -499,7 +465,7 @@ async def deals_result_partial(
                 if deal.sell_price > 0 and yahoo_price < deal.sell_price * 0.25:
                     continue
                 # Strict check for high-margin deals (50%+)
-                if deal.gross_margin_pct >= settings.deal_strict_margin_pct:
+                if deal.gross_margin_pct >= 50.0:
                     if not result.passes_strict_check():
                         continue
                 best_score = result.score

@@ -55,16 +55,13 @@ Keepa Product Finder API
   → マッチング（型番完全一致必須、スコア≥0.40）
   → 利益計算（粗利率≥25%、粗利額≥¥3,000）
   → Discord通知
-  → ディール見つかる→キーワード生き残る / 見つからない→淘汰
 ```
-
-他のAI戦略（brand_expansion, title_decomp, category_keywords, synonyms, LLM, suggest_crossmatch）は補助的なもので、コアではない。series_expansionは無効化済み（max_per_cycle=0）。
 
 ### 出品フロー（SP-API）
 **全出品ルートは `amazon/listing.py` の `submit_to_amazon()` を使用**
 - `api/amazon.py` の `create_listing`（手動出品）
 - `api/amazon.py` の `relist_listing`（手動再出品）
-- `api/keywords.py` の `list_from_deal`（ディールから出品）
+- `api/deals.py` の `list_from_deal`（ディールから出品）
 - `scheduler.py` の `_auto_relist_to_amazon()`（自動再出品）
 
 フロー: PUT → 3秒待機 → condition_note PATCH → image PATCH → price PATCH → quantity PATCH → price Feed → inventory Feed
@@ -107,12 +104,11 @@ Amazon出品価格 = (Yahoo即決 + 送料) / (1 - (マージン% + 手数料%) 
 
 | 設定 | 値 | 変更時の注意 |
 |------|-----|------------|
-| 型番最小文字数 | 5 | matcher.py 3箇所（is_valid_model, _extract_model_numbers, _models_color_suffix_match） |
+| 型番最小文字数 | 5 | matcher.py 2箇所（is_valid_model, _extract_model_numbers） |
 | deal_min_gross_margin_pct | 25.0% | 下げると低品質ディールが増える |
 | deal_min_gross_profit | ¥3,000 | 下げると薄利案件が増える |
 | demand_finder_min_used_price | ¥10,000 | Product Finderの中古最低価格 |
 | demand_finder_min_drops90 | 1 | 90日で1個以上売れていればOK |
-| series_expansion_max_per_cycle | 0 | 無効化済み。変更不要 |
 | sp_api_default_margin_pct | 15.0% | Amazon出品価格のマージン |
 | deal_amazon_fee_pct | 10.0% | Amazon販売手数料 |
 | relist_auto_enabled | True | 自動再出品ON |

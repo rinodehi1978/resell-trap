@@ -5,107 +5,15 @@
 <div class="flex items-center justify-between mb-4">
   <div>
     <h1 class="text-xl font-bold text-gray-900">オートスキャン</h1>
-    <p class="text-sm text-gray-500 mt-1">キーワードを登録すると自動で定期検索し、条件を満たすDealをDiscord/LINEに通知します。</p>
+    <p class="text-sm text-gray-500 mt-1">Product Finderで見つけた商品の型番でヤフオクを自動検索し、利益の出るDealを通知します。</p>
   </div>
   {% if scanner_available %}
   <button onclick="scanAll()" id="scan-all-btn"
           class="px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700">
-    全キーワードをスキャン
+    スキャン実行
   </button>
   {% else %}
   <span class="text-xs text-gray-400">Keepa APIが未設定のためスキャン不可</span>
-  {% endif %}
-</div>
-
-<!-- Add keyword form -->
-<div class="bg-white rounded-lg shadow-sm border p-4 mb-4">
-  <form onsubmit="addKeyword(event)" class="flex gap-3 items-end">
-    <div class="flex-1">
-      <label class="block text-xs font-medium text-gray-600 mb-1">キーワード追加</label>
-      <input type="text" id="new-keyword" placeholder="例: Nintendo Switch, Pokemon Card BOX" required
-             class="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    </div>
-    <button type="submit" class="px-4 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700">
-      追加
-    </button>
-  </form>
-  <div id="add-msg" class="text-xs mt-1"></div>
-</div>
-
-<!-- Keywords list -->
-<div class="bg-white rounded-lg shadow-sm border mb-4">
-  <div class="px-4 py-3 border-b flex items-center justify-between">
-    <h2 class="text-sm font-semibold text-gray-900">登録キーワード ({{ keywords|length }}件)</h2>
-    {% if keywords %}
-    <button onclick="bulkDeleteKeywords()" class="text-xs text-red-600 hover:underline">全キーワード削除</button>
-    {% endif %}
-  </div>
-  {% if not keywords %}
-  <div class="p-8 text-center text-sm text-gray-500">
-    キーワードが登録されていません。上のフォームから追加してください。
-  </div>
-  {% else %}
-  <div class="divide-y">
-    {% for kw in keywords %}
-    <div class="px-4 py-3 flex items-center gap-4" id="kw-row-{{ kw.id }}">
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-medium text-gray-900">{{ kw.keyword }}</span>
-          {% if kw.source == 'product_finder' %}
-          <span class="px-1.5 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded-full">PF</span>
-          {% elif kw.source == 'manual' %}
-          <span class="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-500 rounded-full">手動</span>
-          {% else %}
-          <span class="px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded-full">AI</span>
-          {% endif %}
-          {% if kw.auto_deactivated_at %}
-          <span class="px-1.5 py-0.5 text-[10px] bg-red-100 text-red-600 rounded-full">自動停止</span>
-          {% endif %}
-        </div>
-        <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
-          <span>{{ kw.alert_count }}件のDeal</span>
-          {% if kw.last_scanned_at %}
-          <span>最終スキャン: {{ kw.last_scanned_at.strftime('%m/%d %H:%M') }}</span>
-          {% else %}
-          <span>未スキャン</span>
-          {% endif %}
-          {% if kw.source != 'manual' %}
-          <span class="text-purple-500">スコア: {{ "%.0f"|format(kw.performance_score * 100) }}%</span>
-          <span class="text-gray-400">{{ kw.total_scans }}回スキャン / {{ kw.total_deals_found }}件発見</span>
-          {% endif %}
-          {% if kw.notes %}
-          <span class="text-gray-400">{{ kw.notes }}</span>
-          {% endif %}
-        </div>
-        {% if kw.source != 'manual' and kw.performance_score is not none %}
-        <div class="mt-1 w-24 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-          <div class="h-full rounded-full
-            {% if kw.performance_score >= 0.5 %}bg-green-500
-            {% elif kw.performance_score >= 0.2 %}bg-amber-500
-            {% else %}bg-red-400{% endif %}"
-            style="width: {{ (kw.performance_score * 100)|int }}%"></div>
-        </div>
-        {% endif %}
-      </div>
-      <div class="relative flex items-center gap-2 flex-shrink-0">
-        {% if scanner_available %}
-        <button onclick="scanKeyword({{ kw.id }})" class="px-2 py-1 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 rounded">
-          スキャン
-        </button>
-        {% endif %}
-        <button onclick="toggleKeyword({{ kw.id }}, {{ 'false' if kw.is_active else 'true' }})"
-                class="px-2 py-1 text-xs rounded
-                  {% if kw.is_active %}bg-green-50 text-green-600 hover:bg-green-100{% else %}bg-gray-100 text-gray-500 hover:bg-gray-200{% endif %}">
-          {{ "有効" if kw.is_active else "無効" }}
-        </button>
-        <button onclick="showDeleteConfirm(this, null, {{ kw.id }})"
-                class="px-2 py-1 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded">
-          削除
-        </button>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
   {% endif %}
 </div>
 
@@ -413,85 +321,11 @@
 </div>
 
 <script>
-async function addKeyword(e) {
-  e.preventDefault();
-  const input = document.getElementById('new-keyword');
-  const msgEl = document.getElementById('add-msg');
-  const keyword = input.value.trim();
-  if (!keyword) return;
-
-  try {
-    const resp = await fetch('/api/keywords', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({keyword: keyword}),
-    });
-    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
-    window.location.reload();
-  } catch (e) {
-    msgEl.textContent = e.message;
-    msgEl.className = 'text-xs mt-1 text-red-600';
-  }
-}
-
-async function toggleKeyword(id, active) {
-  try {
-    const resp = await fetch('/api/keywords/' + id, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({is_active: active}),
-    });
-    if (!resp.ok) throw new Error('更新に失敗しました');
-    window.location.reload();
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-async function bulkDeleteKeywords() {
-  if (!confirm('全キーワードを削除しますか？（DealAlert通知履歴も削除されます）')) return;
-  try {
-    const resp = await fetch('/api/keywords', {method: 'DELETE'});
-    if (!resp.ok) throw new Error('Failed');
-    const data = await resp.json();
-    alert(data.deleted + '件のキーワードを削除しました');
-    location.reload();
-  } catch (e) {
-    alert('一括削除に失敗しました: ' + e.message);
-  }
-}
-
-async function deleteKeyword(id, triggerBtn) {
-  if (triggerBtn) triggerBtn.textContent = '...';
-  try {
-    const resp = await fetch('/api/keywords/' + id, {method: 'DELETE'});
-    if (!resp.ok) { let msg = 'Failed'; try { const d = await resp.json(); msg = d.detail || msg; } catch {} throw new Error(msg); }
-    const row = document.getElementById('kw-row-' + id);
-    if (row) { row.style.transition = 'opacity 0.3s'; row.style.opacity = '0'; setTimeout(() => row.remove(), 300); }
-  } catch (e) {
-    alert('削除に失敗しました: ' + e.message);
-  }
-}
-
-async function scanKeyword(id, btn) {
-  if (!btn) btn = event?.target;
-  if (btn) { btn.disabled = true; btn.textContent = 'スキャン中...'; }
-  try {
-    const resp = await fetch('/api/keywords/' + id + '/scan', {method: 'POST'});
-    if (!resp.ok) throw new Error('スキャンに失敗しました');
-    const data = await resp.json();
-    if (btn) btn.textContent = data.new_deals + '件の新規Deal';
-    setTimeout(() => window.location.reload(), 1500);
-  } catch (e) {
-    if (btn) { btn.textContent = 'エラー'; btn.disabled = false; }
-  }
-}
-
 async function scanAll() {
   const btn = document.getElementById('scan-all-btn');
   btn.disabled = true; btn.textContent = 'スキャン中...';
   try {
-    const resp = await fetch('/api/keywords/scan', {method: 'POST'});
+    const resp = await fetch('/api/deals/scan', {method: 'POST'});
     if (!resp.ok) throw new Error('スキャンに失敗しました');
     window.location.reload();
   } catch (e) {
@@ -551,18 +385,7 @@ const _REASON_COLORS = {
 };
 
 async function _loadRejectionSuggestions(pop, alertId) {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 1500);
-    const resp = await fetch('/api/keywords/alerts/' + alertId + '/suggest-rejection', {signal: ctrl.signal});
-    clearTimeout(timer);
-    if (!resp.ok) throw new Error('Failed');
-    const data = await resp.json();
-    _renderSuggestionPopover(pop, alertId, data);
-  } catch (e) {
-    // Fallback to static reasons
-    _renderStaticPopover(pop, alertId);
-  }
+  _renderStaticPopover(pop, alertId);
 }
 
 function _renderSuggestionPopover(pop, alertId, data) {
@@ -623,7 +446,7 @@ function _escHtml(str) {
 async function markAlertListed(alertId, triggerBtn) {
   if (triggerBtn) { triggerBtn.textContent = '...'; triggerBtn.disabled = true; }
   try {
-    const resp = await fetch('/api/keywords/alerts/' + alertId + '/mark-listed', {method: 'POST'});
+    const resp = await fetch('/api/deals/' + alertId + '/mark-listed', {method: 'POST'});
     if (!resp.ok) throw new Error('更新に失敗');
     const pop = triggerBtn?.closest('.delete-confirm-pop');
     if (pop) pop.remove();
@@ -639,7 +462,7 @@ async function rejectAlert(alertId, reason, triggerBtn, note) {
   try {
     const payload = {reason: reason};
     if (note) payload.note = note;
-    const resp = await fetch('/api/keywords/alerts/' + alertId + '/reject', {
+    const resp = await fetch('/api/deals/' + alertId + '/reject', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
@@ -844,7 +667,7 @@ async function submitListing() {
     if (conditionNote) body.condition_note = conditionNote;
     if (imageUrls.length > 0) body.image_urls = imageUrls;
 
-    const resp = await fetch('/api/keywords/alerts/' + currentAlertId + '/list', {
+    const resp = await fetch('/api/deals/' + currentAlertId + '/list', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
@@ -895,7 +718,7 @@ async function _loadModalImages(alertId) {
   empty.classList.add('hidden');
 
   try {
-    const resp = await fetch('/api/keywords/alerts/' + alertId + '/images');
+    const resp = await fetch('/api/deals/' + alertId + '/images');
     if (!resp.ok) throw new Error('Failed');
     const data = await resp.json();
     const images = data.images || [];

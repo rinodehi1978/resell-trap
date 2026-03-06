@@ -1,4 +1,4 @@
-"""Watched keywords CRUD and manual scan trigger."""
+"""Deal alerts API: images, reject, delete, list, scan."""
 
 from __future__ import annotations
 
@@ -12,83 +12,11 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..matcher import is_apparel
-from ..models import DealAlert, MonitoredItem, StatusHistory, WatchedKeyword
-from ..schemas import (
-    DealAlertListResponse,
-    WatchedKeywordCreate,
-    WatchedKeywordListResponse,
-    WatchedKeywordResponse,
-    WatchedKeywordUpdate,
-)
+from ..models import DealAlert, MonitoredItem, StatusHistory
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/keywords", tags=["keywords"])
+router = APIRouter(prefix="/api/deals", tags=["deals"])
 
-
-def _kw_to_response(kw: WatchedKeyword, db: Session) -> dict:
-    """Convert a WatchedKeyword to response dict with alert_count."""
-    count = db.query(DealAlert).filter(DealAlert.keyword_id == kw.id).count()
-    return WatchedKeywordResponse(
-        id=kw.id,
-        keyword=kw.keyword,
-        is_active=kw.is_active,
-        last_scanned_at=kw.last_scanned_at,
-        created_at=kw.created_at,
-        updated_at=kw.updated_at,
-        notes=kw.notes,
-        alert_count=count,
-        source=kw.source,
-        parent_keyword_id=kw.parent_keyword_id,
-        performance_score=kw.performance_score,
-        total_scans=kw.total_scans,
-        total_deals_found=kw.total_deals_found,
-        confidence=kw.confidence,
-        auto_deactivated_at=kw.auto_deactivated_at,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Keyword CRUD (no path params that could conflict)
-# ---------------------------------------------------------------------------
-
-@router.get("", response_model=WatchedKeywordListResponse)
-def list_keywords(
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
-):
-    q = db.query(WatchedKeyword).order_by(WatchedKeyword.created_at.desc())
-    total = q.count()
-    keywords = q.offset(offset).limit(limit).all()
-    items = [_kw_to_response(kw, db) for kw in keywords]
-    return WatchedKeywordListResponse(keywords=items, total=total)
-
-
-@router.post("", response_model=WatchedKeywordResponse, status_code=201)
-def create_keyword(body: WatchedKeywordCreate, db: Session = Depends(get_db)):
-    keyword = body.keyword.strip()
-    if not keyword:
-        raise HTTPException(400, "Keyword must not be empty")
-
-    if is_apparel(keyword):
-        raise HTTPException(400, "アパレル関連キーワードは登録できません")
-
-    existing = db.query(WatchedKeyword).filter(WatchedKeyword.keyword == keyword).first()
-    if existing:
-        raise HTTPException(409, f"Keyword '{keyword}' already exists")
-
-    kw = WatchedKeyword(keyword=keyword, is_active=body.is_active, notes=body.notes)
-    db.add(kw)
-    db.commit()
-    db.refresh(kw)
-    return _kw_to_response(kw, db)
-
-
-# ---------------------------------------------------------------------------
-# Alert routes — MUST be registered BEFORE /{keyword_id} routes
-# to prevent "alerts" from being parsed as keyword_id int param.
-# ---------------------------------------------------------------------------
 
 VALID_REJECTION_REASONS = (
     "wrong_product",   # 商品違い
@@ -100,7 +28,23 @@ VALID_REJECTION_REASONS = (
 )
 
 
-@router.get("/alerts/{alert_id}/images")
+@router.get("")
+def list_deals(
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """List deal alerts with optional status filter."""
+    q = db.query(DealAlert).order_by(DealAlert.notified_at.desc())
+    if status:
+        q = q.filter(DealAlert.status == status)
+    total = q.count()
+    alerts = q.offset(offset).limit(limit).all()
+    return {"alerts": alerts, "total": total}
+
+
+@router.get("/{alert_id}/images")
 async def get_alert_images(alert_id: int, db: Session = Depends(get_db)):
     """Fetch all product images from the Yahoo auction page for this alert."""
     alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
@@ -117,30 +61,9 @@ async def get_alert_images(alert_id: int, db: Session = Depends(get_db)):
     return {"images": images, "auction_id": alert.yahoo_auction_id}
 
 
-@router.get("/alerts/{alert_id}/suggest-rejection")
-def suggest_rejection_reasons(alert_id: int, db: Session = Depends(get_db)):
-    """Analyze an alert's titles and suggest specific rejection reasons."""
-    alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
-    if not alert:
-        raise HTTPException(404, "Alert not found")
-
-    from ..ai.rejection_analyzer import suggest_reasons
-
-    suggestions = suggest_reasons(alert, db)
-    static_reasons = [
-        {"reason": "wrong_product", "label": "商品違い"},
-        {"reason": "accessory", "label": "部品/アクセサリー"},
-        {"reason": "model_variant", "label": "モデル/バリアント違い"},
-        {"reason": "bad_price", "label": "価格おかしい"},
-        {"reason": "never_show", "label": "二度と出すな"},
-        {"reason": "other", "label": "その他"},
-    ]
-    return {"suggestions": suggestions, "static_reasons": static_reasons}
-
-
-@router.post("/alerts/{alert_id}/reject", status_code=200)
+@router.post("/{alert_id}/reject", status_code=200)
 def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)):
-    """Soft-delete a deal alert with rejection reason for learning."""
+    """Soft-delete a deal alert with rejection reason."""
     alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
     if not alert:
         raise HTTPException(404, "Alert not found")
@@ -155,13 +78,6 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
     alert.rejection_note = body.get("note", "")
     alert.rejected_at = datetime.now(timezone.utc)
 
-    # Analyze rejection and persist learned patterns
-    try:
-        from ..ai.rejection_analyzer import analyze_single_rejection
-        analyze_single_rejection(alert, reason, db)
-    except Exception:
-        logger.debug("analyze_single_rejection failed (non-critical)", exc_info=True)
-
     for attempt in range(3):
         try:
             db.commit()
@@ -170,7 +86,6 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
             db.rollback()
             if attempt < 2:
                 time.sleep(1)
-                # Re-apply changes after rollback
                 alert.status = "rejected"
                 alert.rejection_reason = reason
                 alert.rejection_note = body.get("note", "")
@@ -179,19 +94,12 @@ def reject_alert(alert_id: int, body: dict = None, db: Session = Depends(get_db)
                 logger.warning("DB locked during reject after 3 attempts")
                 raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
-    # Reload matcher overrides with new patterns
-    try:
-        from ..matcher_overrides import overrides
-        overrides.reload()
-    except Exception:
-        logger.debug("overrides.reload() failed (non-critical)", exc_info=True)
-
     return {"ok": True, "id": alert_id, "reason": reason}
 
 
-@router.delete("/alerts/{alert_id}", status_code=204)
+@router.delete("/{alert_id}", status_code=204)
 def delete_alert(alert_id: int, db: Session = Depends(get_db)):
-    """Hard-delete a deal alert (fallback)."""
+    """Hard-delete a deal alert."""
     alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
     if not alert:
         raise HTTPException(404, "Alert not found")
@@ -204,19 +112,18 @@ def delete_alert(alert_id: int, db: Session = Depends(get_db)):
             db.rollback()
             if attempt < 2:
                 time.sleep(1)
-                # Re-attach alert for deletion after rollback
                 alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
                 if not alert:
-                    return  # Already deleted by another process
+                    return
                 db.delete(alert)
             else:
                 logger.warning("DB locked during delete after 3 attempts")
                 raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
 
-@router.post("/alerts/{alert_id}/mark-listed", status_code=200)
+@router.post("/{alert_id}/mark-listed", status_code=200)
 def mark_alert_listed(alert_id: int, db: Session = Depends(get_db)):
-    """Mark a deal alert as listed (manual listing, no rejection learning)."""
+    """Mark a deal alert as listed."""
     alert = db.query(DealAlert).filter(DealAlert.id == alert_id).first()
     if not alert:
         raise HTTPException(404, "Alert not found")
@@ -234,7 +141,7 @@ def mark_alert_listed(alert_id: int, db: Session = Depends(get_db)):
                 raise HTTPException(503, "データベースが一時的にビジーです。再試行してください。")
 
 
-@router.post("/alerts/{alert_id}/list", status_code=201)
+@router.post("/{alert_id}/list", status_code=201)
 async def list_from_deal(
     alert_id: int,
     body: dict = None,
@@ -297,7 +204,7 @@ async def list_from_deal(
             win_price=alert.yahoo_price,
         )
         db.add(item)
-        db.flush()  # Get item.id
+        db.flush()
 
     # Calculate price
     yahoo_shipping = getattr(alert, "yahoo_shipping", 0) or 0
@@ -381,9 +288,9 @@ async def list_from_deal(
     item.is_monitoring_active = True
     item.amazon_last_synced_at = datetime.now(timezone.utc)
     item.updated_at = datetime.now(timezone.utc)
-    item.seller_central_checklist = ""  # チェックリストリセット
+    item.seller_central_checklist = ""
 
-    # DealAlertを出品済みに変更（オートスキャンページから非表示）
+    # DealAlertを出品済みに変更
     alert.status = "listed"
 
     # 履歴に記録
@@ -404,13 +311,9 @@ async def list_from_deal(
     }
 
 
-# ---------------------------------------------------------------------------
-# Scan routes (literal path first, then parameterized)
-# ---------------------------------------------------------------------------
-
 @router.post("/scan", status_code=200)
 async def trigger_scan():
-    """Manually trigger a scan of all active keywords."""
+    """Manually trigger a deal scan."""
     from ..main import app_state
 
     scanner = app_state.get("deal_scanner")
@@ -418,75 +321,3 @@ async def trigger_scan():
         raise HTTPException(503, "Deal scanner is not available (Keepa API not configured?)")
     await scanner.scan_all()
     return {"ok": True, "message": "Scan completed"}
-
-
-# ---------------------------------------------------------------------------
-# Keyword routes with {keyword_id} path param — MUST be last
-# ---------------------------------------------------------------------------
-
-@router.put("/{keyword_id}", response_model=WatchedKeywordResponse)
-def update_keyword(keyword_id: int, body: WatchedKeywordUpdate, db: Session = Depends(get_db)):
-    kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
-    if not kw:
-        raise HTTPException(404, f"Keyword {keyword_id} not found")
-
-    update_data = body.model_dump(exclude_unset=True)
-    for key, val in update_data.items():
-        setattr(kw, key, val)
-    kw.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(kw)
-    return _kw_to_response(kw, db)
-
-
-@router.delete("/{keyword_id}", status_code=204)
-def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
-    kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
-    if not kw:
-        raise HTTPException(404, f"Keyword {keyword_id} not found")
-    db.delete(kw)
-    db.commit()
-
-
-@router.delete("", status_code=200)
-def bulk_delete_keywords(
-    source: str | None = None,
-    db: Session = Depends(get_db),
-):
-    """Bulk delete keywords. Pass ?source=ai to delete only non-manual, or omit to delete ALL."""
-    query = db.query(WatchedKeyword)
-    if source == "ai":
-        query = query.filter(WatchedKeyword.source.notin_(["manual"]))
-    keywords = query.all()
-    count = len(keywords)
-    for kw in keywords:
-        db.delete(kw)  # triggers cascade delete of DealAlerts
-    db.commit()
-    return {"deleted": count}
-
-
-@router.get("/{keyword_id}/alerts", response_model=DealAlertListResponse)
-def list_alerts(keyword_id: int, db: Session = Depends(get_db)):
-    kw = db.query(WatchedKeyword).filter(WatchedKeyword.id == keyword_id).first()
-    if not kw:
-        raise HTTPException(404, f"Keyword {keyword_id} not found")
-    alerts = (
-        db.query(DealAlert)
-        .filter(DealAlert.keyword_id == keyword_id)
-        .order_by(DealAlert.notified_at.desc())
-        .limit(100)
-        .all()
-    )
-    return DealAlertListResponse(alerts=alerts, total=len(alerts))
-
-
-@router.post("/{keyword_id}/scan", status_code=200)
-async def trigger_keyword_scan(keyword_id: int):
-    """Manually trigger a scan for a single keyword."""
-    from ..main import app_state
-
-    scanner = app_state.get("deal_scanner")
-    if scanner is None:
-        raise HTTPException(503, "Deal scanner is not available")
-    new_deals = await scanner.scan_keyword_by_id(keyword_id)
-    return {"ok": True, "new_deals": len(new_deals), "deals": new_deals}

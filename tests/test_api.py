@@ -162,15 +162,6 @@ class TestPagination:
         assert len(data["items"]) == 0
         assert data["total"] == 1
 
-    def test_keywords_pagination(self, client):
-        # Create some keywords
-        client.post("/api/keywords", json={"keyword": "test1"})
-        client.post("/api/keywords", json={"keyword": "test2"})
-        resp = client.get("/api/keywords?limit=1&offset=0")
-        data = resp.json()
-        assert len(data["keywords"]) == 1
-        assert data["total"] == 2
-
 
 class TestSearchErrorHandling:
     def test_search_scraper_error(self, client, mock_scraper):

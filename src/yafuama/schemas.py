@@ -297,48 +297,12 @@ class KeepaAnalysisRequest(BaseModel):
     good_rank_threshold: int | None = None
 
 
-# --- Watched Keywords ---
-
-class WatchedKeywordCreate(BaseModel):
-    keyword: str
-    is_active: bool = True
-    notes: str = ""
-
-
-class WatchedKeywordUpdate(BaseModel):
-    is_active: bool | None = None
-    notes: str | None = None
-
-
-class WatchedKeywordResponse(BaseModel):
-    id: int
-    keyword: str
-    is_active: bool
-    last_scanned_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
-    notes: str
-    alert_count: int = 0
-    # AI Discovery fields
-    source: str = "manual"
-    parent_keyword_id: int | None = None
-    performance_score: float = 0.0
-    total_scans: int = 0
-    total_deals_found: int = 0
-    confidence: float = 1.0
-    auto_deactivated_at: datetime | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class WatchedKeywordListResponse(BaseModel):
-    keywords: list[WatchedKeywordResponse]
-    total: int
-
+# --- Deal Alerts ---
 
 class DealAlertResponse(BaseModel):
     id: int
-    keyword_id: int
+    keyword_id: int | None = None
+    search_keyword: str = ""
     yahoo_auction_id: str
     amazon_asin: str
     yahoo_title: str
@@ -355,64 +319,3 @@ class DealAlertResponse(BaseModel):
 class DealAlertListResponse(BaseModel):
     alerts: list[DealAlertResponse]
     total: int
-
-
-# --- AI Discovery ---
-
-class KeywordCandidateResponse(BaseModel):
-    id: int
-    keyword: str
-    strategy: str
-    confidence: float
-    parent_keyword_id: int | None
-    reasoning: str
-    status: str
-    validation_result: str
-    created_at: datetime
-    resolved_at: datetime | None
-
-    model_config = {"from_attributes": True}
-
-
-class KeywordCandidateListResponse(BaseModel):
-    candidates: list[KeywordCandidateResponse]
-    total: int
-
-
-class DiscoveryLogResponse(BaseModel):
-    id: int
-    started_at: datetime
-    finished_at: datetime | None
-    status: str
-    candidates_generated: int
-    candidates_validated: int
-    keywords_added: int
-    keywords_deactivated: int
-    keepa_tokens_used: int
-    strategy_breakdown: str
-
-    model_config = {"from_attributes": True}
-
-
-class DiscoveryStatusResponse(BaseModel):
-    enabled: bool
-    last_cycle: DiscoveryLogResponse | None = None
-    total_ai_keywords: int = 0
-    active_ai_keywords: int = 0
-    pending_candidates: int = 0
-
-
-class DiscoveryCycleResponse(BaseModel):
-    candidates_generated: int = 0
-    candidates_validated: int = 0
-    keywords_added: int = 0
-    keywords_deactivated: int = 0
-    keepa_tokens_used: int = 0
-
-
-class DiscoveryInsightsResponse(BaseModel):
-    top_brands: list[dict] = []
-    top_product_types: list[dict] = []
-    price_ranges: list[dict] = []
-    keyword_count: int = 0
-    deal_count: int = 0

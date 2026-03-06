@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import SessionLocal
 from ..models import (
-    AmazonOrder, DealAlert, DiscoveryLog, KeywordCandidate, MonitoredItem,
+    AmazonOrder, DealAlert, MonitoredItem,
     NotificationLog, StatusHistory,
 )
 from ..notifier.base import BaseNotifier
@@ -94,18 +94,6 @@ class MonitorScheduler:
             max_instances=1,
         )
         logger.info("Deal scanner job registered (interval=%ds)", interval_seconds)
-
-    def add_discovery_job(self, engine, interval_seconds: int) -> None:
-        """Register the AI discovery engine as a periodic job."""
-        self._scheduler.add_job(
-            engine.run_discovery_cycle,
-            "interval",
-            seconds=interval_seconds,
-            id="ai_discovery",
-            replace_existing=True,
-            max_instances=1,
-        )
-        logger.info("AI Discovery job registered (interval=%ds)", interval_seconds)
 
     def add_listing_sync_job(self, checker, interval_seconds: int) -> None:
         """Register the Amazon listing sync checker as a periodic job."""
@@ -1081,8 +1069,6 @@ class MonitorScheduler:
         - DealAlert (expired/rejected): 90 days
         - StatusHistory: 90 days
         - NotificationLog: 30 days
-        - KeywordCandidate (resolved): 30 days
-        - DiscoveryLog: 90 days
         - AmazonOrder: 180 days
         """
         db: Session = SessionLocal()
@@ -1124,29 +1110,6 @@ class MonitorScheduler:
             )
             if count:
                 logger.info("Data retention: deleted %d old NotificationLog records", count)
-                total_deleted += count
-
-            # KeywordCandidate: delete resolved (not pending) older than 30 days
-            count = (
-                db.query(KeywordCandidate)
-                .filter(
-                    KeywordCandidate.status != "pending",
-                    KeywordCandidate.created_at < cutoff_30d,
-                )
-                .delete(synchronize_session=False)
-            )
-            if count:
-                logger.info("Data retention: deleted %d old KeywordCandidate(s)", count)
-                total_deleted += count
-
-            # DiscoveryLog: delete older than 90 days
-            count = (
-                db.query(DiscoveryLog)
-                .filter(DiscoveryLog.started_at < cutoff_90d)
-                .delete(synchronize_session=False)
-            )
-            if count:
-                logger.info("Data retention: deleted %d old DiscoveryLog records", count)
                 total_deleted += count
 
             # AmazonOrder: delete older than 180 days
