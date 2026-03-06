@@ -278,14 +278,18 @@ class DealScanner:
             logger.info("Product Finder: 0 products in %s", cat_name)
             return []
 
-        # Filter: exclude products where used >= new (overpriced used)
+        # Filter: exclude products where used >= effective new price
+        # Compare against the lower of Amazon's own price and 3rd-party new
         filtered = []
         for p in products:
             stats = p.get("stats") or {}
             current = stats.get("current") or []
             used = current[2] if len(current) > 2 and current[2] not in (None, -1) else 0
-            new = current[1] if len(current) > 1 and current[1] not in (None, -1) else 0
-            if new > 0 and used >= new:
+            amazon_price = current[0] if len(current) > 0 and current[0] not in (None, -1) else 0
+            new_3p = current[1] if len(current) > 1 and current[1] not in (None, -1) else 0
+            valid_new = [x for x in (amazon_price, new_3p) if x > 0]
+            effective_new = min(valid_new) if valid_new else 0
+            if effective_new > 0 and used >= effective_new:
                 continue
             filtered.append(p)
 
