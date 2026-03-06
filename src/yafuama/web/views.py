@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..matcher import is_apparel, match_products
-from ..models import AmazonOrder, DealAlert, MonitoredItem, NotificationLog, StatusHistory
+from ..models import AmazonOrder, DealAlert, MonitoredItem, StatusHistory
 
 logger = logging.getLogger(__name__)
 
@@ -135,14 +135,6 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
         .limit(50)
         .all()
     )
-    notifications = (
-        db.query(NotificationLog)
-        .filter(NotificationLog.item_id == item.id)
-        .order_by(NotificationLog.sent_at.desc())
-        .limit(50)
-        .all()
-    )
-
     # Parse checklist JSON
     try:
         checklist = json.loads(item.seller_central_checklist) if item.seller_central_checklist else {}
@@ -157,7 +149,6 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
         "active_page": "items",
         "item": item,
         "history": history,
-        "notifications": notifications,
         "checklist_json": json.dumps(checklist),
     })
 

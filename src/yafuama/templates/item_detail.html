@@ -41,22 +41,14 @@
     <!-- Price info -->
     <div class="bg-white rounded-lg shadow-sm border p-4">
       <h2 class="text-sm font-semibold text-gray-900 mb-3">価格情報</h2>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+      <div class="grid grid-cols-2 gap-3 text-sm">
         <div>
           <div class="text-gray-500 text-xs">現在価格</div>
           <div class="font-semibold">&yen;{{ "{:,}".format(item.current_price) }}</div>
         </div>
         <div>
-          <div class="text-gray-500 text-xs">開始価格</div>
-          <div>&yen;{{ "{:,}".format(item.start_price) }}</div>
-        </div>
-        <div>
           <div class="text-gray-500 text-xs">即決価格</div>
           <div>{% if item.buy_now_price %}&yen;{{ "{:,}".format(item.buy_now_price) }}{% else %}-{% endif %}</div>
-        </div>
-        <div>
-          <div class="text-gray-500 text-xs">入札数</div>
-          <div>{{ item.bid_count }}</div>
         </div>
       </div>
     </div>
@@ -245,72 +237,44 @@
     </div>
     {% endif %}
 
-    <!-- Tabs: History / Notifications -->
-    <div class="bg-white rounded-lg shadow-sm border" x-data="{ tab: 'history' }">
-      <div class="flex border-b">
-        <button @click="tab = 'history'" :class="tab === 'history' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'"
-                class="px-4 py-2 text-sm font-medium">履歴</button>
-        <button @click="tab = 'notifications'" :class="tab === 'notifications' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'"
-                class="px-4 py-2 text-sm font-medium">通知ログ</button>
-      </div>
-
-      <!-- History tab -->
-      <div x-show="tab === 'history'" class="p-4">
-        {% set change_labels = {
-          "status_change": "ステータス変更", "price_change": "価格変更", "bid_change": "入札変更",
-          "initial": "監視開始", "amazon_listing": "Amazon出品", "amazon_delist": "Amazon取下げ",
-          "amazon_delist_auto": "Amazon自動取下げ", "amazon_error": "Amazonエラー"
-        } %}
-        {% set change_colors = {
-          "amazon_listing": "bg-purple-100 text-purple-700",
-          "amazon_delist": "bg-orange-100 text-orange-700",
-          "amazon_delist_auto": "bg-orange-100 text-orange-700",
-          "amazon_error": "bg-red-100 text-red-700"
-        } %}
-        <div class="space-y-2">
-          {% for h in history %}
-          <div class="flex items-center text-xs text-gray-600 gap-2">
-            <span class="text-gray-400 w-32 flex-shrink-0">{{ h.recorded_at.strftime('%m/%d %H:%M') if h.recorded_at else '' }}</span>
-            <span class="px-1.5 py-0.5 rounded font-medium {{ change_colors.get(h.change_type, 'bg-gray-100') }}">{{ change_labels.get(h.change_type, h.change_type) }}</span>
-            {% if h.change_type == 'status_change' %}
-            <span>{{ h.old_status }} &rarr; {{ h.new_status }}</span>
-            {% elif h.change_type == 'price_change' %}
-            <span>&yen;{{ "{:,}".format(h.old_price or 0) }} &rarr; &yen;{{ "{:,}".format(h.new_price or 0) }}</span>
-            {% elif h.change_type == 'bid_change' %}
-            <span>{{ h.old_bid_count or 0 }} &rarr; {{ h.new_bid_count or 0 }}件</span>
-            {% elif h.change_type == 'initial' %}
-            <span>監視を開始しました</span>
-            {% elif h.change_type == 'amazon_listing' %}
-            <span>SKU: {{ h.new_status or '-' }} でAmazonに出品</span>
-            {% elif h.change_type in ('amazon_delist', 'amazon_delist_auto') %}
-            <span>SKU: {{ h.old_status or '-' }} をAmazonから取り下げ</span>
-            {% elif h.change_type == 'amazon_error' %}
-            <span>{{ h.new_status or 'エラー' }}</span>
-            {% endif %}
-          </div>
-          {% else %}
-          <p class="text-xs text-gray-500">履歴はまだありません。</p>
-          {% endfor %}
+    <!-- History -->
+    <div class="bg-white rounded-lg shadow-sm border p-4">
+      <h2 class="text-sm font-semibold text-gray-900 mb-3">履歴</h2>
+      {% set change_labels = {
+        "status_change": "ステータス変更", "price_change": "価格変更", "bid_change": "入札変更",
+        "initial": "監視開始", "amazon_listing": "Amazon出品", "amazon_delist": "Amazon取下げ",
+        "amazon_delist_auto": "Amazon自動取下げ", "amazon_error": "Amazonエラー"
+      } %}
+      {% set change_colors = {
+        "amazon_listing": "bg-purple-100 text-purple-700",
+        "amazon_delist": "bg-orange-100 text-orange-700",
+        "amazon_delist_auto": "bg-orange-100 text-orange-700",
+        "amazon_error": "bg-red-100 text-red-700"
+      } %}
+      <div class="space-y-2">
+        {% for h in history %}
+        <div class="flex items-center text-xs text-gray-600 gap-2">
+          <span class="text-gray-400 w-32 flex-shrink-0">{{ h.recorded_at.strftime('%m/%d %H:%M') if h.recorded_at else '' }}</span>
+          <span class="px-1.5 py-0.5 rounded font-medium {{ change_colors.get(h.change_type, 'bg-gray-100') }}">{{ change_labels.get(h.change_type, h.change_type) }}</span>
+          {% if h.change_type == 'status_change' %}
+          <span>{{ h.old_status }} &rarr; {{ h.new_status }}</span>
+          {% elif h.change_type == 'price_change' %}
+          <span>&yen;{{ "{:,}".format(h.old_price or 0) }} &rarr; &yen;{{ "{:,}".format(h.new_price or 0) }}</span>
+          {% elif h.change_type == 'bid_change' %}
+          <span>{{ h.old_bid_count or 0 }} &rarr; {{ h.new_bid_count or 0 }}件</span>
+          {% elif h.change_type == 'initial' %}
+          <span>監視を開始しました</span>
+          {% elif h.change_type == 'amazon_listing' %}
+          <span>SKU: {{ h.new_status or '-' }} でAmazonに出品</span>
+          {% elif h.change_type in ('amazon_delist', 'amazon_delist_auto') %}
+          <span>SKU: {{ h.old_status or '-' }} をAmazonから取り下げ</span>
+          {% elif h.change_type == 'amazon_error' %}
+          <span>{{ h.new_status or 'エラー' }}</span>
+          {% endif %}
         </div>
-      </div>
-
-      <!-- Notifications tab -->
-      <div x-show="tab === 'notifications'" x-cloak class="p-4">
-        <div class="space-y-2">
-          {% for n in notifications %}
-          <div class="flex items-center text-xs text-gray-600 gap-2">
-            <span class="text-gray-400 w-32 flex-shrink-0">{{ n.sent_at.strftime('%m/%d %H:%M') if n.sent_at else '' }}</span>
-            <span class="px-1.5 py-0.5 rounded font-medium
-              {% if n.success %}bg-green-100 text-green-700{% else %}bg-red-100 text-red-600{% endif %}">
-              {{ n.channel }}
-            </span>
-            <span class="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{{ n.event_type }}</span>
-            <span class="truncate">{{ n.message }}</span>
-          </div>
-          {% else %}
-          <p class="text-xs text-gray-500">通知履歴はまだありません。</p>
-          {% endfor %}
-        </div>
+        {% else %}
+        <p class="text-xs text-gray-500">履歴はまだありません。</p>
+        {% endfor %}
       </div>
     </div>
   </div>
@@ -344,20 +308,14 @@
 
     <!-- Item settings -->
     <div class="bg-white rounded-lg shadow-sm border p-4">
-      <h2 class="text-sm font-semibold text-gray-900 mb-2">設定</h2>
+      <h2 class="text-sm font-semibold text-gray-900 mb-2">メモ</h2>
       <form onsubmit="updateSettings(event)" class="space-y-2">
         <div>
-          <label class="block text-xs text-gray-500 mb-0.5">チェック間隔（秒）</label>
-          <input type="number" id="set-interval" value="{{ item.check_interval_seconds }}" min="30"
-                 class="w-full px-2 py-1 border rounded text-sm">
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-0.5">メモ</label>
           <input type="text" id="set-notes" value="{{ item.notes }}"
-                 class="w-full px-2 py-1 border rounded text-sm">
+                 class="w-full px-2 py-1 border rounded text-sm" placeholder="メモを入力...">
         </div>
         <button type="submit" class="w-full px-2 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded">
-          設定を保存
+          保存
         </button>
         <div id="settings-msg" class="text-xs"></div>
       </form>
@@ -367,8 +325,6 @@
       <h2 class="text-sm font-semibold text-gray-900 mb-2">詳細情報</h2>
       <dl class="text-xs space-y-2">
         <div><dt class="text-gray-500">オークションID</dt><dd class="font-mono">{{ item.auction_id }}</dd></div>
-        <div><dt class="text-gray-500">出品者</dt><dd>{{ item.seller_id or "-" }}</dd></div>
-        <div><dt class="text-gray-500">カテゴリ</dt><dd>{{ item.category_id or "-" }}</dd></div>
         <div><dt class="text-gray-500">終了日時</dt><dd>{{ item.end_time.strftime('%Y-%m-%d %H:%M') if item.end_time else "-" }}</dd></div>
         <div><dt class="text-gray-500">最終チェック</dt><dd>{{ item.last_checked_at.strftime('%m/%d %H:%M') if item.last_checked_at else "-" }}</dd></div>
         <div><dt class="text-gray-500">登録日</dt><dd>{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else "-" }}</dd></div>
@@ -866,14 +822,13 @@ async function updatePrice() {
 
 async function updateSettings(e) {
   e.preventDefault();
-  const interval = parseInt(document.getElementById('set-interval').value);
   const notes = document.getElementById('set-notes').value;
   const msgEl = document.getElementById('settings-msg');
   try {
     const resp = await fetch('/api/items/' + auctionId, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({check_interval_seconds: interval, notes: notes})
+      body: JSON.stringify({notes: notes})
     });
     if (!resp.ok) throw new Error('失敗しました');
     msgEl.textContent = '保存しました'; msgEl.className = 'text-xs text-green-600';
