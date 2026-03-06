@@ -632,6 +632,7 @@ class MonitorScheduler:
         # Calculate price from latest Yahoo BIN price
         price = calculate_amazon_price(
             item.estimated_win_price, item.shipping_cost,
+            forwarding_cost=item.forwarding_cost or settings.deal_forwarding_cost,
             margin_pct=item.amazon_margin_pct,
             amazon_fee_pct=item.amazon_fee_pct,
         )
@@ -739,6 +740,7 @@ class MonitorScheduler:
         new_amazon_price = calculate_amazon_price(
             new_win_price,
             item.shipping_cost,
+            forwarding_cost=item.forwarding_cost or settings.deal_forwarding_cost,
             margin_pct=item.amazon_margin_pct,
             amazon_fee_pct=item.amazon_fee_pct,
         )

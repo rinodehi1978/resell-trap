@@ -210,9 +210,10 @@ async def list_from_deal(
     yahoo_shipping = getattr(alert, "yahoo_shipping", 0) or 0
     estimated_price = alert.yahoo_price
     shipping = yahoo_shipping or settings.sp_api_default_shipping_cost
+    forwarding = alert.forwarding_cost if alert.forwarding_cost > 0 else settings.deal_forwarding_cost
     margin = settings.sp_api_default_margin_pct
     amazon_price = body.get("price") or calculate_amazon_price(
-        estimated_price, shipping, margin_pct=margin
+        estimated_price, shipping, forwarding_cost=forwarding, margin_pct=margin
     )
 
     # Create Amazon listing via SP-API

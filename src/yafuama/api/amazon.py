@@ -179,9 +179,10 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     sku = body.sku or generate_sku(body.auction_id)
     margin = body.margin_pct if body.margin_pct is not None else settings.sp_api_default_margin_pct
     shipping = body.shipping_cost or settings.sp_api_default_shipping_cost
+    forwarding = getattr(body, "forwarding_cost", 0) or item.forwarding_cost or settings.deal_forwarding_cost
     estimated = body.estimated_win_price or item.current_price
 
-    price = calculate_amazon_price(estimated, shipping, margin_pct=margin)
+    price = calculate_amazon_price(estimated, shipping, forwarding_cost=forwarding, margin_pct=margin)
     if price <= 0:
         raise HTTPException(400, "Calculated price is zero — check estimated_win_price")
 
@@ -254,6 +255,7 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     item.amazon_price = price
     item.estimated_win_price = estimated
     item.shipping_cost = shipping
+    item.forwarding_cost = forwarding
     item.amazon_margin_pct = margin
     item.amazon_lead_time_days = lead_time
     item.amazon_shipping_pattern = body.shipping_pattern
@@ -312,7 +314,10 @@ async def update_listing(
         new_price = body.amazon_price
     else:
         new_price = calculate_amazon_price(
-            item.estimated_win_price, item.shipping_cost, margin_pct=item.amazon_margin_pct
+            item.estimated_win_price, item.shipping_cost,
+            forwarding_cost=item.forwarding_cost or 0,
+            margin_pct=item.amazon_margin_pct,
+            amazon_fee_pct=item.amazon_fee_pct,
         )
 
     if new_price > 0 and new_price != item.amazon_price:
@@ -442,7 +447,10 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
         item.shipping_cost = body["shipping_cost"]
 
     price = body.get("price") or item.amazon_price or calculate_amazon_price(
-        item.estimated_win_price, item.shipping_cost, margin_pct=item.amazon_margin_pct,
+        item.estimated_win_price, item.shipping_cost,
+        forwarding_cost=item.forwarding_cost or 0,
+        margin_pct=item.amazon_margin_pct,
+        amazon_fee_pct=item.amazon_fee_pct,
     )
     if price <= 0:
         raise HTTPException(400, "Price is zero — check estimated_win_price")
