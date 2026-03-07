@@ -822,8 +822,12 @@ _ACCESSORY_WORDS = frozenset({
     # Selfie stick / tripod
     "自撮り棒", "じどりぼう", "せるふぃーすてぃっく",
     "三脚", "さんきゃく", "tripod",
-    # Only / sole (signals partial item)
+    # Only / sole / partial (signals partial item)
     "のみ", "only", "単品", "たんぴん", "単体", "たんたい",
+    # Single ear (earbuds sold individually)
+    "右耳", "みぎみみ", "左耳", "ひだりみみ",
+    # Compatible / third-party (not genuine product)
+    "互換", "ごかん",
 })
 
 # Words that indicate a main/complete product (not an accessory)
