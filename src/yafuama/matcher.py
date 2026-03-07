@@ -533,7 +533,7 @@ def _canonicalize_tokens(tokens: list[str]) -> list[str]:
 
 
 _SPEC_UNIT_RE = re.compile(
-    r"^~?\d+(?:mah|mhz|ghz|gb|tb|mb|hz|mm|cm|kg|mp|db|lm|ch|k|w|v|l|cc|°c)$"
+    r"^~?\d+(?:mah|mhz|ghz|khz|gb|tb|mb|hz|mm|cm|kg|mp|db|lm|ch|k|w|v|l|cc|°c|bit|fps|dpi|rpm|psi|awg)$"
 )
 
 
