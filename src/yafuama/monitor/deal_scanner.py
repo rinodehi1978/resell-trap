@@ -18,6 +18,7 @@ from ..matcher import (
     extract_model_numbers_from_text,
     is_apparel,
     is_valid_model,
+    tokenize_title,
 )
 from ..models import DealAlert
 from ..notifier.webhook import LINE_NOTIFY_URL, send_webhook
@@ -192,8 +193,19 @@ class DealScanner:
                 yahoo_models.add(self._normalize_model(m))
 
         # Exact match (after normalization)
-        if not amazon_models & yahoo_models:
+        matched_models = amazon_models & yahoo_models
+        if not matched_models:
             return None
+
+        # Short model number guard: if the matched model is ≤6 chars,
+        # require at least 1 common title token (excluding model numbers)
+        # to confirm the products are actually the same.
+        shortest_match = min(len(m) for m in matched_models)
+        if shortest_match <= 6:
+            yahoo_tokens = tokenize_title(yahoo_title) - matched_models
+            amazon_tokens = tokenize_title(amazon_title) - matched_models
+            if not yahoo_tokens & amazon_tokens:
+                return None
 
         # Score the deal
         yr_shipping = yr.shipping_cost if hasattr(yr, "shipping_cost") else yr.get("shipping_cost")

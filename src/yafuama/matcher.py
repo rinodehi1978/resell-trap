@@ -391,6 +391,15 @@ def extract_model_numbers_from_text(text: str) -> set[str]:
     return _extract_model_numbers(canon)
 
 
+def tokenize_title(text: str) -> set[str]:
+    """Tokenize a title into canonicalized tokens (for title similarity checks)."""
+    norm = normalize(text)
+    tokens = tokenize(norm)
+    tokens = _split_known_brands(tokens)
+    canon = _canonicalize_tokens(tokens)
+    return set(canon)
+
+
 # ---------------------------------------------------------------------------
 # Model-number validation (shared by deal_scanner + AI discovery)
 # ---------------------------------------------------------------------------
