@@ -190,7 +190,7 @@ def keywords_page(request: Request, db: Session = Depends(get_db)):
 
     recent_alerts = (
         db.query(DealAlert)
-        .filter(DealAlert.status.in_(["active", "listed"]))
+        .filter(DealAlert.status == "active")
         .order_by(DealAlert.notified_at.desc())
         .limit(50)
         .all()
