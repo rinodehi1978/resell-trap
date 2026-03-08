@@ -860,9 +860,20 @@ def _has_accessory_words(tokens: list[str]) -> bool:
     if token_set & _ACCESSORY_WORDS:
         return True
     # Suffix + guarded prefix match for compounds
+    # Short words (2 chars) checked separately for suffix and prefix
+    _SHORT_SUFFIX_WORDS = frozenset({"のみ", "互換", "ごかん"})
+    _SHORT_PREFIX_WORDS = frozenset({"右耳", "左耳", "みぎみみ", "ひだりみみ", "互換", "ごかん"})
     for t in tokens:
         if len(t) < 4:
             continue
+        # Short suffix match (e.g. "じゅうでんけーすのみ" ends with "のみ")
+        for sw in _SHORT_SUFFIX_WORDS:
+            if t.endswith(sw) and len(t) > len(sw):
+                return True
+        # Short prefix match (e.g. "みぎみみいやほん" starts with "みぎみみ")
+        for pw in _SHORT_PREFIX_WORDS:
+            if t.startswith(pw) and len(t) > len(pw):
+                return True
         for aw in _ACCESSORY_WORDS:
             if len(aw) >= 3 and t != aw:
                 # Suffix match (safe — "電源あだぷたー")
