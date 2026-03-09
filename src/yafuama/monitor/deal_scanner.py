@@ -202,8 +202,15 @@ class DealScanner:
         # to confirm the products are actually the same.
         shortest_match = min(len(m) for m in matched_models)
         if shortest_match <= 6:
-            yahoo_tokens = tokenize_title(yahoo_title) - matched_models
-            amazon_tokens = tokenize_title(amazon_title) - matched_models
+            # Build set of all model forms to exclude (normalized + lowercase)
+            model_forms = set()
+            for m in matched_models:
+                model_forms.add(m)             # e.g. "SP200"
+                model_forms.add(m.lower())     # e.g. "sp200"
+            yahoo_tokens = {t for t in tokenize_title(yahoo_title)
+                           if t.upper().replace("-", "") not in matched_models}
+            amazon_tokens = {t for t in tokenize_title(amazon_title)
+                            if t.upper().replace("-", "") not in matched_models}
             if not yahoo_tokens & amazon_tokens:
                 return None
 

@@ -545,6 +545,11 @@ _SPEC_UNIT_RE = re.compile(
     r"^~?\d+(?:mah|mhz|ghz|khz|gb|tb|mb|hz|mm|cm|kg|mp|db|lm|ch|k|w|v|l|cc|°c|bit|fps|dpi|rpm|psi|awg)$"
 )
 
+# Dimension patterns like "30x30cm", "100×200mm" — not model numbers
+_DIMENSION_RE = re.compile(
+    r"^\d+[x\u00d7]\d+(?:cm|mm|m|inch)?$"
+)
+
 
 # Product-line names that should merge with an adjacent number token
 # to form a model number (e.g. "hero" + "12" → "hero12")
@@ -589,6 +594,8 @@ def _extract_model_numbers(tokens: list[str]) -> set[str]:
         if has_letter and has_digit and len(stripped) >= 5:
             if _SPEC_UNIT_RE.match(stripped):
                 continue  # Skip spec/unit tokens (4k, 1ch, 128gb, etc.)
+            if _DIMENSION_RE.match(t):
+                continue  # Skip dimension tokens (30x30cm, 100×200mm)
             models.add(stripped)
     return models
 
@@ -828,6 +835,12 @@ _ACCESSORY_WORDS = frozenset({
     "右耳", "みぎみみ", "左耳", "ひだりみみ",
     # Compatible / third-party (not genuine product)
     "互換", "ごかん",
+    # Storage / carrying (収納ケース, 収納バッグ, etc.)
+    "収納", "しゅうのう",
+    # Accessory (generic)
+    "あくせさりー", "accessory",
+    # Bulk / lot sale (まとめ売り — not a specific product)
+    "まとめ売り", "まとめうり",
 })
 
 # Words that indicate a main/complete product (not an accessory)
@@ -862,7 +875,7 @@ def _has_accessory_words(tokens: list[str]) -> bool:
     # Suffix + guarded prefix match for compounds
     # Short words (2 chars) checked separately for suffix and prefix
     _SHORT_SUFFIX_WORDS = frozenset({"のみ", "互換", "ごかん"})
-    _SHORT_PREFIX_WORDS = frozenset({"右耳", "左耳", "みぎみみ", "ひだりみみ", "互換", "ごかん"})
+    _SHORT_PREFIX_WORDS = frozenset({"右耳", "左耳", "みぎみみ", "ひだりみみ", "互換", "ごかん", "収納", "しゅうのう"})
     for t in tokens:
         if len(t) < 4:
             continue
