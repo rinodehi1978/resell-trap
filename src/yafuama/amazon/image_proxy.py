@@ -94,7 +94,7 @@ async def upload_images_to_s3(
                 logger.debug("Uploaded image %d for %s → %s", i, auction_id, s3_url)
 
             except Exception as e:
-                logger.warning(
+                logger.error(
                     "Failed to proxy image %d for %s: %s — using original URL",
                     i, auction_id, e,
                 )

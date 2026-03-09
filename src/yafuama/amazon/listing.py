@@ -132,11 +132,16 @@ async def submit_to_amazon(
         s3_image_urls = await upload_images_to_s3(
             params.image_urls, params.auction_id or sku,
         )
+        s3_count = sum(1 for u in s3_image_urls if "s3." in u)
+        logger.info(
+            "Image proxy: %d/%d uploaded to S3 for %s, URLs: %s",
+            s3_count, len(s3_image_urls), sku, s3_image_urls,
+        )
         try:
             await sp_client.patch_offer_images(seller_id, sku, s3_image_urls)
             logger.info("Offer image PATCH sent for %s (%d images)", sku, len(s3_image_urls))
-        except AmazonApiError:
-            logger.warning("Offer image PATCH failed for %s (non-critical)", sku)
+        except AmazonApiError as e:
+            logger.error("Offer image PATCH failed for %s: %s", sku, e)
 
     # --- 5. PATCH price + quantity (activation) ---
     try:
