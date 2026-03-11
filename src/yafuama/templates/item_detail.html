@@ -113,7 +113,7 @@
           </div>
           {# 中央列: Amazon売価 #}
           <div>
-            <div class="text-gray-500 text-[10px]">Amazon売価</div>
+            <div class="text-gray-500 text-[10px]">Amazon売価{% if item.initial_amazon_price and item.initial_amazon_price != sell_price %} <span class="text-gray-300">(初回 &yen;{{ "{:,}".format(item.initial_amazon_price) }})</span>{% endif %}</div>
             <div class="flex items-center gap-1">
               <span id="price-display" class="font-semibold text-purple-700">&yen;{{ "{:,}".format(sell_price) }}</span>
               {% if item.amazon_sku or item.amazon_listing_status == 'delisted' %}
@@ -243,13 +243,15 @@
       {% set change_labels = {
         "status_change": "ステータス変更", "price_change": "価格変更", "bid_change": "入札変更",
         "initial": "監視開始", "amazon_listing": "Amazon出品", "amazon_delist": "Amazon取下げ",
-        "amazon_delist_auto": "Amazon自動取下げ", "amazon_error": "Amazonエラー"
+        "amazon_delist_auto": "Amazon自動取下げ", "amazon_error": "Amazonエラー",
+        "amazon_price_sync": "Amazon価格同期"
       } %}
       {% set change_colors = {
         "amazon_listing": "bg-purple-100 text-purple-700",
         "amazon_delist": "bg-orange-100 text-orange-700",
         "amazon_delist_auto": "bg-orange-100 text-orange-700",
-        "amazon_error": "bg-red-100 text-red-700"
+        "amazon_error": "bg-red-100 text-red-700",
+        "amazon_price_sync": "bg-blue-100 text-blue-700"
       } %}
       <div class="space-y-2">
         {% for h in history %}
@@ -265,7 +267,18 @@
           {% elif h.change_type == 'initial' %}
           <span>監視を開始しました</span>
           {% elif h.change_type == 'amazon_listing' %}
-          <span>SKU: {{ h.new_status or '-' }} でAmazonに出品</span>
+          <span>
+            {% if h.old_status == 'auto_relist' %}自動再出品{% elif h.old_status == 'relist' %}再出品{% else %}出品{% endif %}
+            &yen;{{ "{:,}".format(h.new_price) if h.new_price else '-' }}
+            {% if h.old_price and h.old_price != h.new_price %}
+            <span class="text-gray-400">(初回 &yen;{{ "{:,}".format(h.old_price) }})</span>
+            {% endif %}
+            <span class="text-gray-400">SKU: {{ h.new_status or '-' }}</span>
+          </span>
+          {% elif h.change_type == 'amazon_price_sync' %}
+          <span>&yen;{{ "{:,}".format(h.old_price or 0) }} &rarr; &yen;{{ "{:,}".format(h.new_price or 0) }}
+            {% if h.old_status %}<span class="text-gray-400">({{ h.old_status }})</span>{% endif %}
+          </span>
           {% elif h.change_type in ('amazon_delist', 'amazon_delist_auto') %}
           <span>SKU: {{ h.old_status or '-' }} をAmazonから取り下げ</span>
           {% elif h.change_type == 'amazon_error' %}
@@ -385,16 +398,20 @@
             </div>
           </div>
 
+          {% set initial_price = item.initial_amazon_price or item.amazon_price or 0 %}
           <div class="border-t pt-2">
             <div class="flex items-center gap-3">
               <div>
-                <div class="text-[10px] text-gray-500">前回出品価格</div>
-                <div class="text-sm text-gray-400">¥{{ "{:,}".format(item.amazon_price or 0) }}</div>
+                <div class="text-[10px] text-gray-500">初回出品価格</div>
+                <div class="text-sm text-purple-600 font-semibold">¥{{ "{:,}".format(initial_price) }}</div>
+                {% if item.amazon_price and item.amazon_price != initial_price %}
+                <div class="text-[10px] text-gray-400">前回: ¥{{ "{:,}".format(item.amazon_price) }}</div>
+                {% endif %}
               </div>
               <span class="text-gray-400 text-lg">&rarr;</span>
               <div>
                 <div class="text-[10px] text-gray-500">出品価格</div>
-                <input type="number" id="rm-price" value="{{ item.amazon_price or 0 }}" min="1"
+                <input type="number" id="rm-price" value="{{ initial_price }}" min="1"
                        class="w-24 text-sm font-bold text-green-700 text-center border rounded px-1 py-0.5"
                        oninput="rmCalcProfit()">
               </div>

@@ -629,13 +629,16 @@ class MonitorScheduler:
         suffix = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
         sku = f"{generate_sku(item.auction_id)}-R{suffix}"
 
-        # Calculate price from latest Yahoo BIN price
-        price = calculate_amazon_price(
-            item.estimated_win_price, item.shipping_cost,
-            forwarding_cost=item.forwarding_cost or settings.deal_forwarding_cost,
-            margin_pct=item.amazon_margin_pct,
-            amazon_fee_pct=item.amazon_fee_pct,
-        )
+        # Use initial listing price if available, otherwise recalculate
+        if item.initial_amazon_price:
+            price = item.initial_amazon_price
+        else:
+            price = calculate_amazon_price(
+                item.estimated_win_price, item.shipping_cost,
+                forwarding_cost=item.forwarding_cost or settings.deal_forwarding_cost,
+                margin_pct=item.amazon_margin_pct,
+                amazon_fee_pct=item.amazon_fee_pct,
+            )
         if price <= 0:
             logger.warning("Auto-relist: price is zero for %s", item.auction_id)
             return False
@@ -702,6 +705,8 @@ class MonitorScheduler:
             change_type="amazon_listing",
             new_status=sku,
             old_status="auto_relist",
+            old_price=item.initial_amazon_price,
+            new_price=price,
         ))
 
         logger.info("Auto-relist: success for %s (SKU=%s, ¥%d)", item.auction_id, sku, price)

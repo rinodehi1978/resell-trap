@@ -253,6 +253,8 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
     item.amazon_condition = condition
     item.amazon_listing_status = "active"
     item.amazon_price = price
+    if item.initial_amazon_price is None:
+        item.initial_amazon_price = price
     item.estimated_win_price = estimated
     item.shipping_cost = shipping
     item.forwarding_cost = forwarding
@@ -273,6 +275,7 @@ async def create_listing(body: AmazonListingCreate, db: Session = Depends(get_db
         item_id=item.id, auction_id=item.auction_id,
         change_type="amazon_listing",
         new_status=sku,
+        new_price=price,
     ))
     db.commit()
     db.refresh(item)
@@ -448,7 +451,7 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
     if body.get("forwarding_cost"):
         item.forwarding_cost = body["forwarding_cost"]
 
-    price = body.get("price") or item.amazon_price or calculate_amazon_price(
+    price = body.get("price") or item.initial_amazon_price or item.amazon_price or calculate_amazon_price(
         item.estimated_win_price, item.shipping_cost,
         forwarding_cost=item.forwarding_cost or 0,
         margin_pct=item.amazon_margin_pct,
@@ -526,6 +529,9 @@ async def relist_listing(auction_id: str, body: dict = None, db: Session = Depen
         item_id=item.id, auction_id=item.auction_id,
         change_type="amazon_listing",
         new_status=sku,
+        old_price=item.initial_amazon_price,
+        new_price=price,
+        old_status="relist",
     ))
     db.commit()
     db.refresh(item)

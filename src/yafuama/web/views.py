@@ -132,7 +132,7 @@ def item_detail(request: Request, auction_id: str, db: Session = Depends(get_db)
         db.query(StatusHistory)
         .filter(StatusHistory.item_id == item.id)
         .order_by(StatusHistory.recorded_at.desc())
-        .limit(50)
+        .limit(200)
         .all()
     )
     # Parse checklist JSON

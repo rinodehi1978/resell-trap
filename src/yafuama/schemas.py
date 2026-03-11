@@ -210,6 +210,7 @@ class AmazonListingResponse(BaseModel):
     amazon_condition: str
     amazon_listing_status: str | None
     amazon_price: int | None
+    initial_amazon_price: int | None = None
     estimated_win_price: int
     shipping_cost: int
     amazon_margin_pct: float

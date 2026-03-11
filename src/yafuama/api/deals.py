@@ -274,6 +274,8 @@ async def list_from_deal(
     item.amazon_condition = condition
     item.amazon_listing_status = "active"
     item.amazon_price = amazon_price
+    if item.initial_amazon_price is None:
+        item.initial_amazon_price = amazon_price
     item.estimated_win_price = estimated_price
     item.shipping_cost = alert.yahoo_shipping or 0
     item.forwarding_cost = forwarding
@@ -299,6 +301,7 @@ async def list_from_deal(
         item_id=item.id, auction_id=item.auction_id,
         change_type="amazon_listing",
         new_status=sku,
+        new_price=amazon_price,
     ))
     db.commit()
 
