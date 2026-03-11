@@ -402,3 +402,192 @@ class TestScanAll:
             await scanner.scan_all()
 
             scanner._keepa.product_finder.assert_not_called()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 鉄壁の防御: Regression tests for matching pipeline invariants
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestIsValidModelSpecValues:
+    """is_valid_model MUST reject all spec/unit values.
+
+    Invariant: _SPEC_UNIT_RE is checked inside is_valid_model(),
+    so ANY code path that calls is_valid_model() is protected.
+    """
+
+    @pytest.mark.parametrize("spec", [
+        "32bit", "64bit", "128bit",
+        "192khz", "44khz", "48khz", "96khz",
+        "100mhz", "2400mhz", "5ghz",
+        "128gb", "256gb", "512gb", "1024mb",
+        "10000mah", "20000mah", "5000mah",
+        "100mm", "200cm",
+        "48fps", "60fps", "120fps",
+        "300dpi", "600dpi",
+        "3000rpm", "10000rpm",
+    ])
+    def test_spec_values_rejected(self, spec):
+        assert DealScanner._is_valid_model(spec) is False
+
+    @pytest.mark.parametrize("dim", [
+        "30x30cm", "100x200mm", "50x50m",
+    ])
+    def test_dimension_values_rejected(self, dim):
+        assert DealScanner._is_valid_model(dim) is False
+
+    def test_blocklisted_brand_rejected(self):
+        assert DealScanner._is_valid_model("52toys") is False
+
+    @pytest.mark.parametrize("word_ver", [
+        "switch2", "bluetooth6", "hero13", "channel5",
+        "version3", "windows11", "android14",
+    ])
+    def test_common_word_version_rejected(self, word_ver):
+        assert DealScanner._is_valid_model(word_ver) is False
+
+    @pytest.mark.parametrize("valid", [
+        "WH-1000XM5", "SV10K", "ECAM35015BH", "CFI-2000A", "SR750",
+    ])
+    def test_valid_models_accepted(self, valid):
+        assert DealScanner._is_valid_model(valid) is True
+
+
+class TestKeepaModelFieldValidation:
+    """Keepa model field MUST go through is_valid_model() before use.
+
+    Invariant: _extract_yahoo_keywords and _match_yahoo_to_amazon both
+    check is_valid_model(model_field) before accepting it.
+    """
+
+    def test_spec_model_field_excluded_from_keywords(self, scanner):
+        """Keepa model='192khz' should NOT become a Yahoo search keyword."""
+        product = {"model": "192khz", "title": "DAC Converter 192khz"}
+        result = scanner._extract_yahoo_keywords(product)
+        assert "192khz" not in result
+
+    def test_spec_model_field_excluded_from_keywords_32bit(self, scanner):
+        product = {"model": "32bit", "title": "Audio Interface 32bit 384khz"}
+        result = scanner._extract_yahoo_keywords(product)
+        assert "32bit" not in result
+
+    def test_dimension_model_field_excluded(self, scanner):
+        product = {"model": "30x30cm", "title": "Tile 30x30cm Marble"}
+        result = scanner._extract_yahoo_keywords(product)
+        assert "30x30cm" not in result
+
+    @pytest.mark.asyncio
+    async def test_spec_model_not_matched(self, scanner):
+        """Match should fail when Keepa model field is a spec value."""
+        yr = FakeYahooResult("y1", "DAC 192khz USB オーディオ", 10000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "USB DAC 192khz Audio", 20000, model="192khz")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+
+class TestShortModelGuardRegression:
+    """Short model guard MUST exclude noise/color words from token overlap.
+
+    Invariant: For models ≤7 chars, require at least 1 meaningful common
+    token (excluding model itself, noise words, colors).
+    """
+
+    @pytest.mark.asyncio
+    async def test_short_model_no_common_tokens_rejected(self, scanner):
+        """Short model matching but no common meaningful tokens → rejected."""
+        yr = FakeYahooResult("y1", "SR750 ステレオ レシーバー", 5000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "SR750 Fishing Reel", 15000, model="SR750")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_short_model_with_common_product_word_accepted(self, scanner):
+        """Short model + common meaningful token → accepted."""
+        yr = FakeYahooResult("y1", "SR750 Fishing リール 中古", 5000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "SR750 Fishing Reel", 15000, model="SR750")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_noise_only_overlap_rejected(self, scanner):
+        """Common tokens that are all noise (black, 中古, etc.) don't count."""
+        yr = FakeYahooResult("y1", "AB123 black 中古 美品", 5000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "AB123 Black Widget", 15000, model="AB123")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        # "black" is in _SHORT_MODEL_GUARD_NOISE
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_long_model_skips_guard(self, scanner):
+        """Models >7 chars skip the short model guard entirely."""
+        yr = FakeYahooResult("y1", "WH1000XM5 中古 美品", 15000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "WH-1000XM5 Headphones", 30000, model="WH-1000XM5")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is not None
+
+
+class TestAccessoryDetectionRegression:
+    """Accessory signals MUST block matching in _match_yahoo_to_amazon.
+
+    Invariant: extract_accessory_signals_from_text() is called early
+    in _match_yahoo_to_amazon and returns True → None result.
+    """
+
+    @pytest.mark.asyncio
+    async def test_carrying_case_rejected(self, scanner):
+        yr = FakeYahooResult("y1", "WH-1000XM5 carrying case 収納", 3000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "Sony WH-1000XM5 Headphones", 30000, model="WH-1000XM5")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_spool_accessory_rejected(self, scanner):
+        yr = FakeYahooResult("y1", "SR750 spool パーツ", 2000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "SR750 Fishing Reel", 15000, model="SR750")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_you_suffix_rejected(self, scanner):
+        """「用」suffix (e.g. SR750用) should be detected as accessory."""
+        yr = FakeYahooResult("y1", "SR750用 交換フィルター", 2000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "SR750 Fishing Reel", 15000, model="SR750")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_taiou_rejected(self, scanner):
+        """「対応」(compatible) signals accessory."""
+        yr = FakeYahooResult("y1", "WH-1000XM5 対応 イヤーパッド", 1500, shipping_cost=0)
+        kp = _make_keepa_product("B001", "Sony WH-1000XM5 Headphones", 30000, model="WH-1000XM5")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_mesh_rejected(self, scanner):
+        yr = FakeYahooResult("y1", "SM58 mesh グリル 交換", 1000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "Shure SM58 Microphone", 15000, model="SM58S")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_label_rejected(self, scanner):
+        yr = FakeYahooResult("y1", "QL820NWB label ラベル 互換", 2000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "Brother QL-820NWB Printer", 20000, model="QL820NWB")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_precut_rejected(self, scanner):
+        yr = FakeYahooResult("y1", "WH-1000XM5 precut フィルム", 500, shipping_cost=0)
+        kp = _make_keepa_product("B001", "Sony WH-1000XM5 Headphones", 30000, model="WH-1000XM5")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_main_product_not_rejected(self, scanner):
+        """Main product (not accessory) should NOT be rejected."""
+        yr = FakeYahooResult("y1", "Sony WH-1000XM5 ヘッドホン 本体", 15000, shipping_cost=0)
+        kp = _make_keepa_product("B001", "Sony WH-1000XM5 Headphones", 30000, model="WH-1000XM5")
+        result = await scanner._match_yahoo_to_amazon(yr, kp)
+        assert result is not None

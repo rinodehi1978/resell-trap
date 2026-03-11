@@ -98,6 +98,23 @@ Amazon出品価格 = (Yahoo即決 + 送料) / (1 - (マージン% + 手数料%) 
 - 型番一致が必須（型番なしはリジェクト）
 - 型番衝突は即リジェクト（XM4 vs XM5 = 別商品）
 
+### 型番バリデーション鉄壁ルール（絶対に破らない）
+**全てのコードパスで `is_valid_model()` を通すこと。**
+
+1. **`is_valid_model()` は唯一の門番**: 型番を受け入れる全経路（Keepa model field、タイトル抽出、手動入力）で必ず呼ぶ
+2. **`is_valid_model()` 内部チェック一覧**（全て必須、削除禁止）:
+   - `_SPEC_UNIT_RE`: スペック値拒否（32bit, 192khz, 128gb, 100mm, 48fps等）
+   - `_DIMENSION_RE`: 寸法値拒否（30x30cm, 100×200mm等）
+   - `_MODEL_BLOCKLIST`: ブランド名等の誤型番拒否（52toys等）
+   - `_WORD_VERSION_RE` + `COMMON_WORDS`: 一般語+バージョン拒否（switch2, bluetooth6等）
+   - 5文字最小、英字+数字必須、日本語拒否
+3. **Keepa model field**: `_extract_yahoo_keywords()` と `_match_yahoo_to_amazon()` の両方で `is_valid_model()` チェック必須
+4. **短型番ガード**: 7文字以下の型番一致時、ノイズ語・色を除外した意味のある共通トークンが必要
+5. **アクセサリー検出**: `_ACCESSORY_WORDS` に新パターンを追加したら `extract_accessory_signals_from_text()` で検出されることをテストで確認
+6. **新しいフィルタを追加したら**: 必ず `tests/test_deal_scanner.py` と `tests/test_matcher.py` に回帰テストを追加
+
+⚠️ **`_extract_model_numbers()` にもスペック値フィルタがあるが、`is_valid_model()` とは独立。両方に存在する必要がある（二重防御）**
+
 ---
 
 ## 重要な設定値（config.py）

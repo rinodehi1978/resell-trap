@@ -918,6 +918,10 @@ def _has_accessory_words(tokens: list[str]) -> bool:
     for t in tokens:
         if len(t) < 4:
             continue
+        # Skip tokens that are known main-product descriptors
+        # (e.g. "こーどれす" starts with "こーど" but means "cordless", not "cord")
+        if t in _MAIN_PRODUCT_WORDS:
+            continue
         # Short suffix match (e.g. "じゅうでんけーすのみ" ends with "のみ")
         for sw in _SHORT_SUFFIX_WORDS:
             if t.endswith(sw) and len(t) > len(sw):

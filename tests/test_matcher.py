@@ -1,5 +1,7 @@
 """Tests for smart product matcher."""
 
+import pytest
+
 from yafuama.matcher import (
     MatchResult,
     _canonicalize_tokens,
@@ -7,6 +9,9 @@ from yafuama.matcher import (
     _insert_boundary_spaces,
     _kata_to_hira,
     _split_known_brands,
+    extract_accessory_signals_from_text,
+    extract_model_numbers_from_text,
+    is_valid_model,
     match_products,
     normalize,
     tokenize,
@@ -298,3 +303,135 @@ class TestMatchProducts:
         assert isinstance(r.brand_match, bool)
         assert isinstance(r.brand_conflict, bool)
         assert isinstance(r.token_overlap, float)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 鉄壁の防御: Regression tests for matcher.py invariants
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestIsValidModelInvariant:
+    """is_valid_model() is the single gate for all model number validation.
+
+    Invariant: Every code path that accepts a model number MUST call
+    is_valid_model(). This test class ensures the function itself
+    correctly rejects all known false-positive patterns.
+    """
+
+    # --- Spec values ---
+    @pytest.mark.parametrize("spec", [
+        "32bit", "64bit", "128bit",
+        "192khz", "44khz", "48khz", "96khz",
+        "100mhz", "2400mhz", "5ghz",
+        "128gb", "256gb", "512gb", "1024mb",
+        "10000mah", "20000mah",
+        "100mm", "200cm",
+        "48fps", "60fps", "120fps",
+        "300dpi", "600dpi",
+        "3000rpm",
+        "100psi", "18awg",
+    ])
+    def test_spec_values_rejected(self, spec):
+        assert is_valid_model(spec) is False
+
+    # --- Dimension values ---
+    @pytest.mark.parametrize("dim", [
+        "30x30cm", "100x200mm", "50x50m", "10x20inch",
+    ])
+    def test_dimension_values_rejected(self, dim):
+        assert is_valid_model(dim) is False
+
+    # --- Common word + version ---
+    @pytest.mark.parametrize("word_ver", [
+        "switch2", "bluetooth6", "hero13", "windows11",
+        "android14", "version3", "channel5", "kindle4",
+    ])
+    def test_common_word_version_rejected(self, word_ver):
+        assert is_valid_model(word_ver) is False
+
+    # --- Blocklist ---
+    def test_blocklisted_rejected(self):
+        assert is_valid_model("52toys") is False
+
+    # --- Too short ---
+    @pytest.mark.parametrize("short", ["V8", "G5", "SV10", "3DS"])
+    def test_short_rejected(self, short):
+        assert is_valid_model(short) is False
+
+    # --- No letter or no digit ---
+    def test_no_digit_rejected(self):
+        assert is_valid_model("Bluetooth") is False
+
+    def test_no_letter_rejected(self):
+        assert is_valid_model("12345") is False
+
+    # --- Japanese ---
+    def test_japanese_rejected(self):
+        assert is_valid_model("スイッチ2") is False
+
+    # --- Valid models MUST pass ---
+    @pytest.mark.parametrize("valid", [
+        "WH-1000XM5", "SV10K", "ECAM35015BH", "CFI-2000A",
+        "SR750", "QL820NWB", "SV18FF", "SM58S",
+    ])
+    def test_valid_models_accepted(self, valid):
+        assert is_valid_model(valid) is True
+
+
+class TestExtractModelNumbersInvariant:
+    """_extract_model_numbers uses _SPEC_UNIT_RE and _DIMENSION_RE internally.
+
+    Invariant: Spec values and dimensions never appear in model number sets.
+    """
+
+    def test_spec_excluded_from_extraction(self):
+        models = _extract_model_numbers(["192khz", "32bit", "wh1000xm5"])
+        assert "192khz" not in models
+        assert "32bit" not in models
+        assert "wh1000xm5" in models
+
+    def test_dimension_excluded_from_extraction(self):
+        models = _extract_model_numbers(["30x30cm", "ecam35015bh"])
+        assert "30x30cm" not in models
+        assert "ecam35015bh" in models
+
+    def test_extract_from_text_rejects_specs(self):
+        """extract_model_numbers_from_text also filters out spec values."""
+        models = extract_model_numbers_from_text("DAC USB 192khz 32bit WH-1000XM5")
+        assert "192khz" not in models
+        assert "32bit" not in models
+        assert "wh1000xm5" in models
+
+
+class TestAccessoryDetectionInvariant:
+    """extract_accessory_signals_from_text must catch all accessory patterns.
+
+    Invariant: All words in _ACCESSORY_WORDS are detected, plus
+    「用」suffix detection works on compound tokens.
+    """
+
+    @pytest.mark.parametrize("text,expected", [
+        ("WH-1000XM5 carrying case", True),
+        ("SR750 spool パーツ", True),
+        ("QL-820NWB label ラベル", True),
+        ("SM58 mesh グリルボール", True),
+        ("WH-1000XM5 対応 イヤーパッド", True),
+        ("SR750 precut フィルム", True),
+        ("SR750用 交換フィルター", True),       # 「用」suffix
+        ("ECAM35015BH 互換 フィルター", True),
+        ("WH-1000XM5 イヤーパッド のみ", True),
+        ("WH-1000XM5 収納 ケース", True),
+        # Main products should NOT trigger
+        ("Sony WH-1000XM5 ヘッドホン", False),
+        ("Dyson SV18FF 掃除機 コードレス", False),
+    ])
+    def test_accessory_detection(self, text, expected):
+        assert extract_accessory_signals_from_text(text) is expected
+
+    def test_you_suffix_on_model(self):
+        """「型番用」= accessory for that model."""
+        assert extract_accessory_signals_from_text("SR750用 スプール") is True
+
+    def test_standalone_you_token(self):
+        """Standalone 「用」token is in _ACCESSORY_WORDS."""
+        assert extract_accessory_signals_from_text("SR750 用 フィルター") is True
