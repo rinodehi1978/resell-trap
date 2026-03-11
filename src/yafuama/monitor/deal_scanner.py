@@ -29,6 +29,26 @@ YAHOO_AUCTION_URL = "https://auctions.yahoo.co.jp/jp/auction/{}"
 
 _BARCODE_RE = re.compile(r"^\d{8,}$")
 
+# Noise words excluded from short-model-number guard's common-token check.
+# These are too generic to confirm that two products are the same.
+_SHORT_MODEL_GUARD_NOISE = frozenset({
+    # Japanese listing noise
+    "送料", "無料", "中古", "美品", "新品", "未使用", "未開封", "即決",
+    "箱", "あり", "なし", "のみ", "付属", "付き", "動作", "確認", "済み",
+    "正規品", "非売品", "国内", "海外", "保証", "欠品",
+    # Japanese particles
+    "の", "が", "で", "に", "は", "を", "と", "も", "や",
+    "から", "まで", "より", "など", "ほど",
+    # English noise
+    "a", "the", "and", "or", "for", "with", "in", "on", "at", "to", "of",
+    "is", "it", "no", "not", "be", "an", "as", "by",
+    "new", "used", "free", "shipping", "japan", "import",
+    # Common too-generic product words
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+    "black", "white", "red", "blue", "green", "silver", "gold",
+    "ぶらっく", "ほわいと", "れっど", "ぶるー", "ぐりーん",
+})
+
 
 def _is_barcode(text: str) -> bool:
     """Detect barcodes/EAN codes masquerading as model numbers."""
@@ -176,7 +196,8 @@ class DealScanner:
         # Extract Amazon model numbers (normalized, 5+ chars)
         amazon_models: set[str] = set()
         model_field = (keepa_product.get("model") or "").strip()
-        if model_field and not _is_barcode(model_field) and len(model_field) >= 5:
+        if (model_field and not _is_barcode(model_field)
+                and len(model_field) >= 5 and is_valid_model(model_field)):
             amazon_models.add(self._normalize_model(model_field))
         amazon_title = keepa_product.get("title") or ""
         for m in extract_model_numbers_from_text(amazon_title):
@@ -197,20 +218,22 @@ class DealScanner:
         if not matched_models:
             return None
 
-        # Short model number guard: if the matched model is ≤6 chars,
-        # require at least 1 common title token (excluding model numbers)
-        # to confirm the products are actually the same.
+        # Short model number guard: if the matched model is ≤7 chars,
+        # require at least 1 common meaningful title token (excluding model
+        # numbers and noise words) to confirm the products are the same.
         shortest_match = min(len(m) for m in matched_models)
-        if shortest_match <= 6:
-            # Build set of all model forms to exclude (normalized + lowercase)
-            model_forms = set()
+        if shortest_match <= 7:
+            # Build exclusion set: all model forms (already lowercase)
+            exclude_models = set()
             for m in matched_models:
-                model_forms.add(m)             # e.g. "SP200"
-                model_forms.add(m.lower())     # e.g. "sp200"
+                exclude_models.add(m)              # lowercase normalized
+                exclude_models.add(m.upper())      # uppercase
             yahoo_tokens = {t for t in tokenize_title(yahoo_title)
-                           if t.upper().replace("-", "") not in matched_models}
+                           if t.lower().replace("-", "") not in exclude_models
+                           and t not in _SHORT_MODEL_GUARD_NOISE}
             amazon_tokens = {t for t in tokenize_title(amazon_title)
-                            if t.upper().replace("-", "") not in matched_models}
+                            if t.lower().replace("-", "") not in exclude_models
+                            and t not in _SHORT_MODEL_GUARD_NOISE}
             if not yahoo_tokens & amazon_tokens:
                 return None
 

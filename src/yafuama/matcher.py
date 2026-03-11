@@ -442,6 +442,11 @@ COMMON_WORDS = frozenset({
 })
 
 
+_MODEL_BLOCKLIST = frozenset({
+    "52toys",
+})
+
+
 def is_valid_model(s: str) -> bool:
     """Check if a string looks like a real model number.
 
@@ -449,6 +454,8 @@ def is_valid_model(s: str) -> bool:
     - Contain at least one ASCII letter and one ASCII digit
     - Contain NO Japanese characters
     - NOT be a common word + version number (e.g. switch2, bluetooth6)
+    - NOT be a spec/unit value (e.g. 32bit, 192khz, 128gb)
+    - NOT be in the blocklist (e.g. brand names like 52toys)
     """
     stripped = re.sub(r"[-\u30fc\s]", "", s)
     has_letter = bool(re.search(r"[a-zA-Z]", stripped))
@@ -459,6 +466,18 @@ def is_valid_model(s: str) -> bool:
 
     # Reject model numbers shorter than 5 characters
     if len(stripped) < 5:
+        return False
+
+    # Reject spec/unit values (32bit, 192khz, 128gb, etc.)
+    if _SPEC_UNIT_RE.match(stripped.lower()):
+        return False
+
+    # Reject dimension patterns (30x30cm, 100×200mm)
+    if _DIMENSION_RE.match(stripped.lower()):
+        return False
+
+    # Reject known non-model strings (brand names etc.)
+    if stripped.lower() in _MODEL_BLOCKLIST:
         return False
 
     # Reject "common_word + version_number" pattern
@@ -475,7 +494,12 @@ def extract_accessory_signals_from_text(text: str) -> bool:
     tokens = tokenize(norm)
     tokens = _split_known_brands(tokens)
     canon = _canonicalize_tokens(tokens)
-    return _has_accessory_words(canon)
+    if _has_accessory_words(canon):
+        return True
+    # 「用」suffix detection (e.g. "SR750用" = accessory for SR750)
+    if any(t.endswith("用") and len(t) >= 2 for t in canon):
+        return True
+    return False
 
 
 def normalize(text: str) -> str:
@@ -841,6 +865,21 @@ _ACCESSORY_WORDS = frozenset({
     "あくせさりー", "accessory",
     # Bulk / lot sale (まとめ売り — not a specific product)
     "まとめ売り", "まとめうり",
+    # Grille / mesh (microphone parts etc.)
+    "ぐりる", "grille", "ぐりるぼーる",
+    "めっしゅ", "mesh",
+    # Labels / consumables
+    "らべる", "label",
+    # Compatibility indicator (型番+対応 = accessory for that model)
+    "対応", "たいおう",
+    # Carrying / storage (already have 収納, add explicit forms)
+    "きゃりんぐ", "carrying",
+    # Precut / compatible replacement
+    "ぷれかっと", "precut",
+    # "用" as standalone token (e.g. "SR750 用" = accessory for SR750)
+    "用",
+    # Spool / reel (fishing etc.)
+    "すぷーる", "spool", "スプール",
 })
 
 # Words that indicate a main/complete product (not an accessory)
@@ -874,7 +913,7 @@ def _has_accessory_words(tokens: list[str]) -> bool:
         return True
     # Suffix + guarded prefix match for compounds
     # Short words (2 chars) checked separately for suffix and prefix
-    _SHORT_SUFFIX_WORDS = frozenset({"のみ", "互換", "ごかん"})
+    _SHORT_SUFFIX_WORDS = frozenset({"のみ", "互換", "ごかん", "対応", "たいおう"})
     _SHORT_PREFIX_WORDS = frozenset({"右耳", "左耳", "みぎみみ", "ひだりみみ", "互換", "ごかん", "収納", "しゅうのう"})
     for t in tokens:
         if len(t) < 4:
