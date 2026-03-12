@@ -14,6 +14,8 @@ from ..config import settings
 from ..database import SessionLocal
 from ..keepa.analyzer import score_deal
 from ..matcher import (
+    CANONICAL_BRAND_NAMES,
+    CANONICAL_PRODUCT_TYPES,
     extract_accessory_signals_from_text,
     extract_model_numbers_from_text,
     is_apparel,
@@ -47,6 +49,13 @@ _SHORT_MODEL_GUARD_NOISE = frozenset({
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
     "black", "white", "red", "blue", "green", "silver", "gold",
     "ぶらっく", "ほわいと", "れっど", "ぶるー", "ぐりーん",
+    # Product category words (not mapped by _PRODUCT_SYNONYMS but too generic
+    # to confirm specific product identity for short model numbers)
+    "りーる", "reel", "すぴにんぐ", "spinning", "すぴにんぐりーる",
+    "べいと", "bait", "べいとりーる",
+    "そうじき", "掃除機", "vacuum", "cleaner",
+    "でんどう", "電動", "cordless",
+    "こーどれす",  # already in _MAIN_PRODUCT_WORDS but also here for noise
 })
 
 
@@ -230,10 +239,14 @@ class DealScanner:
                 exclude_models.add(m.upper())      # uppercase
             yahoo_tokens = {t for t in tokenize_title(yahoo_title)
                            if t.lower().replace("-", "") not in exclude_models
-                           and t not in _SHORT_MODEL_GUARD_NOISE}
+                           and t not in _SHORT_MODEL_GUARD_NOISE
+                           and t not in CANONICAL_BRAND_NAMES
+                           and t not in CANONICAL_PRODUCT_TYPES}
             amazon_tokens = {t for t in tokenize_title(amazon_title)
                             if t.lower().replace("-", "") not in exclude_models
-                            and t not in _SHORT_MODEL_GUARD_NOISE}
+                            and t not in _SHORT_MODEL_GUARD_NOISE
+                            and t not in CANONICAL_BRAND_NAMES
+                            and t not in CANONICAL_PRODUCT_TYPES}
             if not yahoo_tokens & amazon_tokens:
                 return None
 

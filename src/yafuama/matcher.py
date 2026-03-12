@@ -150,6 +150,14 @@ _BRAND_ALIASES: dict[str, str] = {
     "ろじくーる": "logicool", "logicool": "logicool", "logitech": "logicool",
     "しゅあー": "shure", "shure": "shure",
     "ごーぷろ": "gopro", "gopro": "gopro",
+    # --- Fishing / Outdoor ---
+    "しまの": "shimano", "shimano": "shimano",
+    "だいわ": "daiwa", "daiwa": "daiwa",
+    # --- Tools ---
+    "はいこーき": "hikoki", "hikoki": "hikoki",
+    "ぼっしゅ": "bosch", "bosch": "bosch",
+    # --- Trains / Hobby ---
+    "かとー": "kato", "kato": "kato",
     # --- Toys / Collectibles ---
     "ぽけもん": "pokemon", "pokemon": "pokemon",
     "れご": "lego", "lego": "lego",
@@ -159,6 +167,10 @@ _BRAND_ALIASES: dict[str, str] = {
     "ことぶきや": "kotobukiya", "kotobukiya": "kotobukiya",
     "べありっく": "bearbrick", "bearbrick": "bearbrick",
 }
+
+# Canonical brand names (exported for use in short-model-guard noise filtering)
+CANONICAL_BRAND_NAMES: frozenset[str] = frozenset(_BRAND_ALIASES.values())
+
 
 # ---------------------------------------------------------------------------
 # Product synonyms (Japanese kana → canonical)
@@ -201,6 +213,11 @@ _PRODUCT_SYNONYMS: dict[str, str] = {
     "わいやれす": "wireless", "wireless": "wireless",
     "ぶるーとぅーす": "bluetooth", "bluetooth": "bluetooth",
 }
+
+# Canonical product type names (exported for short-model-guard noise filtering).
+# After canonicalization, "すぴーかー" → "speaker" etc. These are too generic
+# to confirm product identity for short model numbers.
+CANONICAL_PRODUCT_TYPES: frozenset[str] = frozenset(_PRODUCT_SYNONYMS.values())
 
 # ---------------------------------------------------------------------------
 # Noise words to exclude from similarity comparison
