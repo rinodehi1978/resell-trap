@@ -349,7 +349,7 @@ class DealScanner:
                 return True, variation_asin
 
         logger.info(
-            "Image mismatch rejected: Yahoo '%s' vs ASIN %s",
+            "Image mismatch: Yahoo '%s' vs ASIN %s",
             deal.yahoo_title[:50], deal.amazon_asin,
         )
         return False, None
@@ -590,7 +590,7 @@ class DealScanner:
         """
         # Reject book ASINs (ISBN format: all digits)
         if self._is_book_asin(deal.amazon_asin):
-            logger.debug("Skipping book ASIN: %s (%s)", deal.amazon_asin, deal.yahoo_title[:50])
+            logger.info("Skip book ASIN: %s (%s)", deal.amazon_asin, deal.yahoo_title[:50])
             return None
 
         # Check if already notified (exact auction+ASIN match)
@@ -603,6 +603,7 @@ class DealScanner:
             .first()
         )
         if existing:
+            logger.info("Skip exact dedup: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
             return None
 
         # ASIN dedup: skip if same ASIN notified recently (different auction)
@@ -619,23 +620,14 @@ class DealScanner:
         if recent_same_asin:
             # Allow if this deal is significantly better (profit improved by ¥1000+)
             if deal.gross_profit <= recent_same_asin.gross_profit + 1000:
-                logger.debug(
-                    "ASIN dedup: skipping %s (ASIN %s, recent alert %d hrs ago)",
+                logger.info(
+                    "Skip ASIN dedup: %s (ASIN %s, recent alert %d hrs ago)",
                     deal.yahoo_auction_id, deal.amazon_asin, settings.deal_dedup_hours,
                 )
                 return None
 
-        # Verify auction is still live before notifying
-        try:
-            auction_data = await self._scraper.fetch_auction(deal.yahoo_auction_id)
-            if auction_data is None:
-                logger.info("Auction %s unreachable — skipping deal", deal.yahoo_auction_id)
-                return None
-            if getattr(auction_data, "is_closed", False):
-                logger.info("Auction %s already ended — skipping deal", deal.yahoo_auction_id)
-                return None
-        except Exception:
-            pass  # Network error — don't block the deal, let it through
+        # Liveness check removed: search uses select=selling (active only).
+        # Individual fetch_auction calls caused Yahoo rate-limiting (all 404).
 
         # Record alert BEFORE webhook (crash-safe: prevents duplicate notifications)
         alert = DealAlert(
@@ -660,7 +652,7 @@ class DealScanner:
             db.flush()
         except IntegrityError:
             nested.rollback()
-            logger.debug("Duplicate alert skipped: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
+            logger.info("Skip integrity dup: %s + %s", deal.yahoo_auction_id, deal.amazon_asin)
             return None
 
         # Send notification (after DB save to prevent duplicates on crash)

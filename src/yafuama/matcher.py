@@ -874,6 +874,9 @@ _ACCESSORY_WORDS = frozenset({
     "のみ", "only", "単品", "たんぴん", "単体", "たんたい",
     # Single ear (earbuds sold individually)
     "右耳", "みぎみみ", "左耳", "ひだりみみ",
+    "片耳", "かたみみ",
+    # No main unit / body missing
+    "本体なし", "ほんたいなし",
     # Compatible / third-party (not genuine product)
     "互換", "ごかん",
     # Storage / carrying (収納ケース, 収納バッグ, etc.)
@@ -914,6 +917,8 @@ _ACCESSORY_PREFIX_SUFFIXES = frozenset({
     "版", "用", "部", "型", "式", "台", "器",
     "のみ", "単体", "単品", "交換", "替え",
     "ぱーつ", "きっと", "kit",
+    # Case/ケース: "充電ケース", "収納ケース" etc.
+    "けーす", "case",
 })
 
 
@@ -930,8 +935,8 @@ def _has_accessory_words(tokens: list[str]) -> bool:
         return True
     # Suffix + guarded prefix match for compounds
     # Short words (2 chars) checked separately for suffix and prefix
-    _SHORT_SUFFIX_WORDS = frozenset({"のみ", "互換", "ごかん", "対応", "たいおう"})
-    _SHORT_PREFIX_WORDS = frozenset({"右耳", "左耳", "みぎみみ", "ひだりみみ", "互換", "ごかん", "収納", "しゅうのう"})
+    _SHORT_SUFFIX_WORDS = frozenset({"のみ", "互換", "ごかん", "対応", "たいおう", "ひだり", "みぎ", "左", "右"})
+    _SHORT_PREFIX_WORDS = frozenset({"右耳", "左耳", "みぎみみ", "ひだりみみ", "互換", "ごかん", "収納", "しゅうのう", "充電", "じゅうでん"})
     for t in tokens:
         if len(t) < 4:
             continue
@@ -942,6 +947,9 @@ def _has_accessory_words(tokens: list[str]) -> bool:
         # Short suffix match (e.g. "じゅうでんけーすのみ" ends with "のみ")
         for sw in _SHORT_SUFFIX_WORDS:
             if t.endswith(sw) and len(t) > len(sw):
+                # "左右" means both sides (complete product), not a part
+                if sw in ("左", "右") and "左右" in t:
+                    continue
                 return True
         # Short prefix match (e.g. "みぎみみいやほん" starts with "みぎみみ")
         for pw in _SHORT_PREFIX_WORDS:
