@@ -119,6 +119,16 @@ class SpApiClient:
             includedData=["summaries", "images", "salesRanks"],
         )
 
+    async def get_catalog_item_with_variations(self, asin: str) -> dict:
+        """Get catalog item with relationships and images for variation lookup."""
+        api = self._catalog_api()
+        return await self._call(
+            api.get_catalog_item,
+            asin=asin,
+            marketplaceIds=[self._marketplace_id],
+            includedData=["summaries", "images", "relationships"],
+        )
+
     async def get_product_type(self, asin: str) -> str:
         """Get the Amazon product type for an ASIN (e.g. 'SPACE_HEATER').
 

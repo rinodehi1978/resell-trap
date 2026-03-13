@@ -108,6 +108,15 @@ class Settings(BaseSettings):
     alert_email_from: str = ""  # 送信元Gmail
     alert_email_password: str = ""  # Gmailアプリパスワード
 
+    # Image Verification (Claude Vision)
+    anthropic_api_key: str = ""
+    vision_enabled: bool = True  # 画像比較を有効化（anthropic_api_key必須）
+    vision_model: str = "claude-haiku-4-5-20251001"  # Haiku 4.5 = 最安（~$0.002/call）
+
+    @property
+    def vision_available(self) -> bool:
+        return bool(self.vision_enabled and self.anthropic_api_key)
+
     # Auth
     api_key: str = ""  # Set to enable API key auth; empty = no auth
 

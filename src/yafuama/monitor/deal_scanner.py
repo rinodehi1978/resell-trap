@@ -97,6 +97,19 @@ class DealScanner:
         self._pf_cache: tuple[float, list[dict]] | None = None
         self._category_index: int = 0  # カテゴリローテーション用
 
+        # Image verification (Claude Vision)
+        self._image_verifier = None
+        if settings.vision_available:
+            try:
+                from ..vision.image_verifier import ImageVerifier
+                self._image_verifier = ImageVerifier(
+                    api_key=settings.anthropic_api_key,
+                    model=settings.vision_model,
+                )
+                logger.info("Image verifier enabled (model=%s)", settings.vision_model)
+            except Exception as e:
+                logger.warning("Failed to initialize image verifier: %s", e)
+
     # ── Helper methods ─────────────────────────────────────────────────
 
     _JAPANESE_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
@@ -292,6 +305,125 @@ class DealScanner:
 
         return deal
 
+    # ── Image verification ──────────────────────────────────────────────
+
+    async def _verify_image_match(self, deal, keepa_product: dict) -> tuple[bool, str | None]:
+        """Verify deal by comparing Yahoo and Amazon product images.
+
+        Returns (verified, alt_asin):
+        - (True, None): images match or can't verify → keep original ASIN
+        - (True, variation_asin): variation match → use this ASIN instead
+        - (False, None): images don't match → reject deal
+        """
+        yahoo_img = deal.yahoo_image_url
+        if not yahoo_img:
+            return True, None
+
+        # Get Amazon image from Keepa imagesCSV (free, no API call)
+        from ..vision.image_verifier import keepa_image_url, sp_api_main_image_url
+        amazon_img = keepa_image_url(keepa_product.get("imagesCSV", ""))
+
+        # Fallback: get from SP-API catalog
+        if not amazon_img and self._sp_api:
+            try:
+                catalog = await self._sp_api.get_catalog_item(deal.amazon_asin)
+                amazon_img = sp_api_main_image_url(catalog)
+            except Exception:
+                pass
+
+        if not amazon_img:
+            return True, None  # No Amazon image → can't verify → allow
+
+        # Compare images
+        result = await self._image_verifier.compare_images(yahoo_img, amazon_img)
+        if result is None:
+            return True, None  # API error → allow through
+        if result:
+            logger.info("Image verified: Yahoo '%s' matches ASIN %s", deal.yahoo_title[:40], deal.amazon_asin)
+            return True, None
+
+        # Images don't match → check variations via SP-API
+        if self._sp_api:
+            variation_asin = await self._search_variation_match(deal, yahoo_img)
+            if variation_asin:
+                return True, variation_asin
+
+        logger.info(
+            "Image mismatch rejected: Yahoo '%s' vs ASIN %s",
+            deal.yahoo_title[:50], deal.amazon_asin,
+        )
+        return False, None
+
+    async def _search_variation_match(self, deal, yahoo_img_url: str) -> str | None:
+        """Search Amazon catalog variations for an image match."""
+        from ..vision.image_verifier import sp_api_main_image_url
+
+        asin = deal.amazon_asin
+        try:
+            catalog = await self._sp_api.get_catalog_item_with_variations(asin)
+        except Exception as e:
+            logger.debug("Variation lookup failed for %s: %s", asin, e)
+            return None
+
+        # Collect variation ASINs from relationships
+        variation_asins = self._extract_variation_asins(catalog, asin)
+
+        # If this ASIN is a child, get parent's children
+        if not variation_asins:
+            parent_asin = self._extract_parent_asin(catalog)
+            if parent_asin:
+                try:
+                    parent_catalog = await self._sp_api.get_catalog_item_with_variations(parent_asin)
+                    variation_asins = self._extract_variation_asins(parent_catalog, asin)
+                except Exception:
+                    pass
+
+        if not variation_asins:
+            return None
+
+        logger.info("Checking %d variations for ASIN %s", len(variation_asins), asin)
+
+        # Fetch images for each variation (limit to 5)
+        variation_images: list[tuple[str, str]] = []
+        for var_asin in variation_asins[:5]:
+            try:
+                var_catalog = await self._sp_api.get_catalog_item(var_asin)
+                var_img = sp_api_main_image_url(var_catalog)
+                if var_img:
+                    variation_images.append((var_asin, var_img))
+            except Exception:
+                continue
+
+        if not variation_images:
+            return None
+
+        return await self._image_verifier.find_matching_variation(
+            yahoo_img_url, variation_images,
+        )
+
+    @staticmethod
+    def _extract_variation_asins(catalog: dict, exclude_asin: str) -> list[str]:
+        """Extract child variation ASINs from SP-API catalog response."""
+        asins: list[str] = []
+        for rel_set in catalog.get("relationships", []):
+            for rel in rel_set.get("relationships", []):
+                for child in rel.get("childAsins", []):
+                    child_asin = child if isinstance(child, str) else child.get("asin", "")
+                    if child_asin and child_asin != exclude_asin:
+                        asins.append(child_asin)
+        return asins
+
+    @staticmethod
+    def _extract_parent_asin(catalog: dict) -> str | None:
+        """Extract parent ASIN from SP-API catalog response."""
+        for rel_set in catalog.get("relationships", []):
+            for rel in rel_set.get("relationships", []):
+                parents = rel.get("parentAsins", [])
+                if parents:
+                    parent = parents[0]
+                    return parent if isinstance(parent, str) else parent.get("asin")
+        return None
+
     # ── Product Finder pipeline ────────────────────────────────────────
 
     async def _get_pf_products(self) -> list[dict]:
@@ -393,6 +525,15 @@ class DealScanner:
                         and deal.gross_margin_pct <= settings.deal_max_gross_margin_pct
                         and deal.gross_profit >= settings.deal_min_gross_profit
                     ):
+                        # Image verification (if enabled)
+                        if self._image_verifier:
+                            verified, alt_asin = await self._verify_image_match(
+                                deal, product,
+                            )
+                            if not verified:
+                                continue
+                            if alt_asin:
+                                deal.amazon_asin = alt_asin
                         deals.append(deal)
 
                 if not deals:
