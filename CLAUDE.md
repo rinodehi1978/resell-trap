@@ -52,10 +52,27 @@ Keepa Product Finder API
   → フィルタ: 中古≥¥10,000、90日で1個以上売れ、中古<新品
   → 通過した商品から型番抽出（5文字以上のみ）
   → その型番でヤフオク検索
-  → マッチング（型番完全一致必須、スコア≥0.40）
+  → マッチング（型番完全一致必須）
   → 利益計算（粗利率≥25%、粗利額≥¥3,000）
+  → 画像検証（Claude Vision、後述）
   → Discord通知
 ```
+
+### 画像検証パイプライン（Claude Vision）
+型番一致後に、Yahoo/Amazonの商品画像をClaude Visionで比較して同一商品か判定する。
+```
+型番マッチ成功 → Amazon画像取得（Keepa imagesCSV or SP-API）
+  → Claude Vision (Haiku 4.5) でYahoo画像と比較
+  → 一致: 通知
+  → 不一致: SP-APIでバリエーション検索（色違い・エディション違い）
+    → バリエーション画像と再比較 → 一致ならASIN差替えて通知
+    → 全不一致: 却下
+  → エラー時: 安全側（ディール通す）
+```
+- モジュール: `vision/image_verifier.py`
+- モデル: `claude-haiku-4-5-20251001`（~$0.002/call）
+- 設定: `ANTHROPIC_API_KEY`, `VISION_ENABLED`, `VISION_MODEL`
+- `ANTHROPIC_API_KEY`未設定時は画像検証スキップ（従来通り動作）
 
 ### 出品フロー（SP-API）
 **全出品ルートは `amazon/listing.py` の `submit_to_amazon()` を使用**
@@ -131,6 +148,8 @@ Amazon出品価格 = (Yahoo即決 + 送料) / (1 - (マージン% + 手数料%) 
 | relist_auto_enabled | True | 自動再出品ON |
 | price_sync_enabled | True | 価格自動同期ON |
 | verification_delay_seconds | 30 | 反映確認の待機秒数 |
+| vision_enabled | True | 画像検証ON（ANTHROPIC_API_KEY必須） |
+| vision_model | claude-haiku-4-5-20251001 | Vision APIモデル |
 
 ---
 
