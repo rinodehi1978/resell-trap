@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # Demand Discovery（Product Finder フィルタ）
     demand_finder_min_drops90: int = 1        # 過去3ヶ月で1個以上売れていればOK
     demand_finder_min_used_price: int = 10000 # 中古最低価格（円）
-    demand_finder_max_results: int = 50       # Product Finder最大取得件数
+    demand_finder_max_results: int = 100      # Product Finder最大取得件数
 
     # Product Finder Deal Scanner（Amazon起点スキャン）
     pf_cache_ttl: int = 1800                 # Product Finder結果キャッシュTTL（秒、30分）
