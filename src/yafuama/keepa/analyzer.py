@@ -384,6 +384,8 @@ class DealCandidate:
     gross_margin_pct: float   # gross_profit / sell_price * 100
     rank_trend: str
     price_trend: str
+    # Image verification result (None = not checked, True = match, False = mismatch)
+    image_verified: bool | None = None
 
 
 def score_deal(
