@@ -347,7 +347,7 @@ class TestScanPfDeals:
             mock_settings.deal_min_gross_profit = 3000
 
             db = MagicMock()
-            result = await scanner._scan_pf_deals(products, db)
+            result, stats = await scanner._scan_pf_deals(products, db)
 
         # Should have searched only 3 times (limited by pf_max_yahoo_searches)
         assert scanner._scraper.search.call_count == 3
@@ -365,11 +365,12 @@ class TestScanPfDeals:
             mock_settings.deal_scan_max_pages = 1
 
             db = MagicMock()
-            result = await scanner._scan_pf_deals(products, db)
+            result, stats = await scanner._scan_pf_deals(products, db)
 
         # No Yahoo search should have been made
         scanner._scraper.search.assert_not_called()
         assert result == 0
+        assert stats["no_keywords"] == 1
 
 
 class TestScanAll:

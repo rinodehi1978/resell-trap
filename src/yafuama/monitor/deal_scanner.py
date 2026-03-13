@@ -484,57 +484,86 @@ class DealScanner:
         logger.info("Product Finder [%s]: %d products (%d after filter)", cat_name, len(products), len(filtered))
         return filtered
 
-    async def _scan_pf_deals(self, products: list[dict], db) -> int:
+    async def _scan_pf_deals(self, products: list[dict], db) -> tuple[int, dict]:
         """Scan Product Finder products against Yahoo Auctions."""
         yahoo_searches = 0
         total_deals = 0
 
+        # Diagnostic counters
+        stats = {
+            "no_keywords": 0,
+            "yahoo_errors": 0,
+            "yahoo_empty": 0,
+            "yahoo_results": 0,
+            "match_passed": 0,
+            "profit_passed": 0,
+            "image_rejected": 0,
+        }
+
         for product in products:
             keywords = self._extract_yahoo_keywords(product)
             if not keywords:
+                stats["no_keywords"] += 1
                 continue
 
             for keyword in keywords:
                 if yahoo_searches >= settings.pf_max_yahoo_searches:
                     logger.info("PF scan: Yahoo search limit reached (%d)", yahoo_searches)
-                    return total_deals
+                    return total_deals, stats
+
+                # Strip "/" suffix (Yahoo returns 404 for encoded slashes)
+                search_kw = keyword
+                if "/" in search_kw:
+                    search_kw = search_kw.split("/")[0]
+                    if len(search_kw) < 5:
+                        continue
 
                 # Search Yahoo
                 yahoo_results = []
+                search_failed = False
                 for page in range(1, settings.deal_scan_max_pages + 1):
                     try:
-                        page_results = await self._scraper.search(keyword, page=page)
+                        page_results = await self._scraper.search(search_kw, page=page)
                     except Exception as e:
-                        logger.warning("Yahoo search failed for PF keyword '%s': %s", keyword, e)
+                        logger.warning("Yahoo search failed for PF keyword '%s': %s", search_kw, e)
+                        search_failed = True
                         break
                     if not page_results:
                         break
                     yahoo_results.extend(page_results)
                 yahoo_searches += 1
 
+                if search_failed:
+                    stats["yahoo_errors"] += 1
                 if not yahoo_results:
+                    stats["yahoo_empty"] += 1
                     await asyncio.sleep(0.3)
                     continue
+                stats["yahoo_results"] += len(yahoo_results)
 
                 # Match each Yahoo result against this Amazon product
                 deals = []
                 for yr in yahoo_results:
                     deal = await self._match_yahoo_to_amazon(yr, product)
-                    if deal and (
-                        deal.gross_margin_pct >= settings.deal_min_gross_margin_pct
-                        and deal.gross_margin_pct <= settings.deal_max_gross_margin_pct
-                        and deal.gross_profit >= settings.deal_min_gross_profit
-                    ):
-                        # Image verification (if enabled)
-                        if self._image_verifier:
-                            verified, alt_asin = await self._verify_image_match(
-                                deal, product,
-                            )
-                            if not verified:
-                                continue
-                            if alt_asin:
-                                deal.amazon_asin = alt_asin
-                        deals.append(deal)
+                    if deal:
+                        stats["match_passed"] += 1
+                        if (
+                            deal.gross_margin_pct >= settings.deal_min_gross_margin_pct
+                            and deal.gross_margin_pct <= settings.deal_max_gross_margin_pct
+                            and deal.gross_profit >= settings.deal_min_gross_profit
+                        ):
+                            stats["profit_passed"] += 1
+                            # Image verification (if enabled)
+                            if self._image_verifier:
+                                verified, alt_asin = await self._verify_image_match(
+                                    deal, product,
+                                )
+                                if not verified:
+                                    stats["image_rejected"] += 1
+                                    continue
+                                if alt_asin:
+                                    deal.amazon_asin = alt_asin
+                            deals.append(deal)
 
                 if not deals:
                     await asyncio.sleep(0.3)
@@ -549,7 +578,7 @@ class DealScanner:
 
                 await asyncio.sleep(0.3)
 
-        return total_deals
+        return total_deals, stats
 
     async def _process_deal(self, deal, keyword: str, db) -> dict | None:
         """Process a matched deal: dedup check, save alert, notify.
@@ -653,15 +682,25 @@ class DealScanner:
         try:
             pf_deals = 0
             products = []
+            stats = {}
             if settings.keepa_enabled:
                 products = await self._get_pf_products()
                 if products:
-                    pf_deals = await self._scan_pf_deals(products, db)
+                    pf_deals, stats = await self._scan_pf_deals(products, db)
                     db.commit()
             logger.info(
                 "Scan complete: %d deals from %d products",
                 pf_deals, len(products),
             )
+            if stats:
+                logger.info(
+                    "Scan stats: no_kw=%d yahoo_err=%d yahoo_empty=%d "
+                    "yahoo_hits=%d match=%d profit_ok=%d img_reject=%d",
+                    stats["no_keywords"], stats["yahoo_errors"],
+                    stats["yahoo_empty"], stats["yahoo_results"],
+                    stats["match_passed"], stats["profit_passed"],
+                    stats["image_rejected"],
+                )
         except Exception as e:
             logger.exception("Error in deal scan: %s", e)
             db.rollback()
