@@ -553,13 +553,11 @@ class DealScanner:
                     deal = await self._match_yahoo_to_amazon(yr, product)
                     if deal:
                         stats["match_passed"] += 1
-                        if (
+                        if not (
                             deal.gross_margin_pct >= settings.deal_min_gross_margin_pct
                             and deal.gross_margin_pct <= settings.deal_max_gross_margin_pct
                             and deal.gross_profit >= settings.deal_min_gross_profit
                         ):
-                            stats["profit_passed"] += 1
-                        else:
                             logger.info(
                                 "Profit NG: Y¥%s+送料¥%s → A¥%s 粗利¥%s(%.1f%%) [%s] %s",
                                 f"{deal.yahoo_price:,}",
@@ -571,29 +569,30 @@ class DealScanner:
                                 deal.yahoo_title[:50],
                             )
                             continue
-                            # Price ratio guard: Yahoo price too low vs Amazon
-                            # → likely an accessory/part, not the real product
-                            yahoo_total = deal.yahoo_price + (deal.yahoo_shipping or 0)
-                            price_ratio = yahoo_total / deal.sell_price * 100 if deal.sell_price else 100
-                            if price_ratio < settings.deal_min_price_ratio:
-                                logger.info(
-                                    "Skip low price ratio %.0f%%: Yahoo ¥%s vs Amazon ¥%s (%s)",
-                                    price_ratio, f"{yahoo_total:,}", f"{deal.sell_price:,}",
-                                    deal.yahoo_title[:50],
-                                )
-                                continue
-                            # Image verification (gate: reject mismatches)
-                            if self._image_verifier:
-                                verified, alt_asin = await self._verify_image_match(
-                                    deal, product,
-                                )
-                                if verified is False:
-                                    stats["image_rejected"] += 1
-                                    continue  # Skip mismatched images
-                                if verified is True and alt_asin:
-                                    deal.amazon_asin = alt_asin
-                                # None (error) → let through
-                            deals.append(deal)
+                        stats["profit_passed"] += 1
+                        # Price ratio guard: Yahoo price too low vs Amazon
+                        # → likely an accessory/part, not the real product
+                        yahoo_total = deal.yahoo_price + (deal.yahoo_shipping or 0)
+                        price_ratio = yahoo_total / deal.sell_price * 100 if deal.sell_price else 100
+                        if price_ratio < settings.deal_min_price_ratio:
+                            logger.info(
+                                "Skip low price ratio %.0f%%: Yahoo ¥%s vs Amazon ¥%s (%s)",
+                                price_ratio, f"{yahoo_total:,}", f"{deal.sell_price:,}",
+                                deal.yahoo_title[:50],
+                            )
+                            continue
+                        # Image verification (gate: reject mismatches)
+                        if self._image_verifier:
+                            verified, alt_asin = await self._verify_image_match(
+                                deal, product,
+                            )
+                            if verified is False:
+                                stats["image_rejected"] += 1
+                                continue  # Skip mismatched images
+                            if verified is True and alt_asin:
+                                deal.amazon_asin = alt_asin
+                            # None (error) → let through
+                        deals.append(deal)
 
                 if not deals:
                     await asyncio.sleep(0.3)
