@@ -559,6 +559,17 @@ class DealScanner:
                             and deal.gross_profit >= settings.deal_min_gross_profit
                         ):
                             stats["profit_passed"] += 1
+                            # Price ratio guard: Yahoo price too low vs Amazon
+                            # → likely an accessory/part, not the real product
+                            yahoo_total = deal.yahoo_price + (deal.yahoo_shipping or 0)
+                            price_ratio = yahoo_total / deal.sell_price * 100 if deal.sell_price else 100
+                            if price_ratio < settings.deal_min_price_ratio:
+                                logger.info(
+                                    "Skip low price ratio %.0f%%: Yahoo ¥%s vs Amazon ¥%s (%s)",
+                                    price_ratio, f"{yahoo_total:,}", f"{deal.sell_price:,}",
+                                    deal.yahoo_title[:50],
+                                )
+                                continue
                             # Image verification (gate: reject mismatches)
                             if self._image_verifier:
                                 verified, alt_asin = await self._verify_image_match(

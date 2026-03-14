@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     deal_min_gross_margin_pct: float = 25.0  # 最低粗利率 (%)
     deal_max_gross_margin_pct: float = 999.0  # 粗利率上限なし（型番一致で精度担保）
     deal_min_gross_profit: int = 3000     # 最低粗利益 (円)
+    deal_min_price_ratio: float = 30.0    # Yahoo価格/Amazon価格の最低比率 (%)。低すぎ=部品・アクセサリの疑い
     deal_scan_interval: int = 1800        # 自動スキャン間隔 (秒、30分)
     deal_default_shipping: int = 700        # 送料不明時のデフォルト送料 (円)
     deal_scan_max_pages: int = 2           # Yahoo検索の最大ページ数
