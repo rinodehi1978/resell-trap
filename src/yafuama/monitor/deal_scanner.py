@@ -426,8 +426,14 @@ class DealScanner:
 
     # ── Product Finder pipeline ────────────────────────────────────────
 
+    # 1サイクルあたりのカテゴリ数
+    _PF_CATS_PER_CYCLE = 3
+
     async def _get_pf_products(self) -> list[dict]:
-        """Fetch products from Keepa Product Finder with category rotation."""
+        """Fetch products from Keepa Product Finder with category rotation.
+
+        Scans multiple categories per cycle for broader coverage.
+        """
         now = monotonic()
 
         # Return cached if still valid
@@ -443,32 +449,55 @@ class DealScanner:
             logger.warning("Keepa tokens low (%s), skipping Product Finder", tokens)
             return []
 
-        # カテゴリローテーション: 毎回違うカテゴリを検索
-        cat_id, cat_name = self._PF_CATEGORIES[self._category_index % len(self._PF_CATEGORIES)]
-        self._category_index += 1
+        # カテゴリローテーション: 毎回複数カテゴリを検索
+        all_products = []
+        cat_names = []
+        for _ in range(self._PF_CATS_PER_CYCLE):
+            cat_id, cat_name = self._PF_CATEGORIES[self._category_index % len(self._PF_CATEGORIES)]
+            self._category_index += 1
+            cat_names.append(cat_name)
 
-        try:
-            products = await self._keepa.product_finder(
-                selection={
-                    "rootCategory": cat_id,
-                    "salesRankDrops90_gte": settings.demand_finder_min_drops90,
-                    "current_USED_gte": settings.demand_finder_min_used_price,
-                    "perPage": settings.demand_finder_max_results,
-                },
-                stats=settings.keepa_default_stats_days,
-            )
-        except Exception as e:
-            logger.warning("Product Finder failed (%s): %s", cat_name, e)
-            return []
+            # トークン残量を毎回チェック
+            tokens = self._keepa.tokens_left
+            if tokens is not None and tokens <= 100:
+                logger.warning("Keepa tokens low (%s), stopping after %d categories", tokens, len(cat_names) - 1)
+                break
 
-        if not products:
-            logger.info("Product Finder: 0 products in %s", cat_name)
+            try:
+                products = await self._keepa.product_finder(
+                    selection={
+                        "rootCategory": cat_id,
+                        "salesRankDrops90_gte": settings.demand_finder_min_drops90,
+                        "current_USED_gte": settings.demand_finder_min_used_price,
+                        "perPage": settings.demand_finder_max_results,
+                    },
+                    stats=settings.keepa_default_stats_days,
+                )
+            except Exception as e:
+                logger.warning("Product Finder failed (%s): %s", cat_name, e)
+                continue
+
+            if not products:
+                logger.info("Product Finder: 0 products in %s", cat_name)
+                continue
+
+            all_products.extend(products)
+
+        if not all_products:
+            logger.info("Product Finder: 0 products from %s", "+".join(cat_names))
             return []
 
         # Filter: exclude products where used >= effective new price
         # Compare against the lower of Amazon's own price and 3rd-party new
+        # Also dedup by ASIN (categories may overlap)
+        seen_asins = set()
         filtered = []
-        for p in products:
+        for p in all_products:
+            asin = p.get("asin")
+            if asin and asin in seen_asins:
+                continue
+            if asin:
+                seen_asins.add(asin)
             stats = p.get("stats") or {}
             current = stats.get("current") or []
             used = current[2] if len(current) > 2 and current[2] not in (None, -1) else 0
@@ -481,7 +510,7 @@ class DealScanner:
             filtered.append(p)
 
         self._pf_cache = (now, filtered)
-        logger.info("Product Finder [%s]: %d products (%d after filter)", cat_name, len(products), len(filtered))
+        logger.info("Product Finder [%s]: %d products (%d after filter)", "+".join(cat_names), len(all_products), len(filtered))
         return filtered
 
     async def _scan_pf_deals(self, products: list[dict], db) -> tuple[int, dict]:

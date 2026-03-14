@@ -88,7 +88,7 @@ class Settings(BaseSettings):
 
     # Product Finder Deal Scanner（Amazon起点スキャン）
     pf_cache_ttl: int = 1800                 # Product Finder結果キャッシュTTL（秒、30分）
-    pf_max_yahoo_searches: int = 30          # 1サイクルあたりのYahoo検索上限
+    pf_max_yahoo_searches: int = 80          # 1サイクルあたりのYahoo検索上限
 
     # S3 Image Proxy (Yahoo画像→S3→Amazon)
     s3_image_bucket: str = ""  # S3バケット名（空ならS3アップロード無効）
