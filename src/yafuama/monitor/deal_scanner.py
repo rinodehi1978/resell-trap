@@ -504,6 +504,12 @@ class DealScanner:
             keywords = self._extract_yahoo_keywords(product)
             if not keywords:
                 stats["no_keywords"] += 1
+                logger.info(
+                    "No keywords: ASIN=%s model='%s' title='%s'",
+                    product.get("asin", "?"),
+                    product.get("model", ""),
+                    (product.get("title") or "")[:80],
+                )
                 continue
 
             for keyword in keywords:
