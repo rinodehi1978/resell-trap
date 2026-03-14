@@ -559,6 +559,18 @@ class DealScanner:
                             and deal.gross_profit >= settings.deal_min_gross_profit
                         ):
                             stats["profit_passed"] += 1
+                        else:
+                            logger.info(
+                                "Profit NG: Y¥%s+送料¥%s → A¥%s 粗利¥%s(%.1f%%) [%s] %s",
+                                f"{deal.yahoo_price:,}",
+                                f"{deal.yahoo_shipping or 0:,}",
+                                f"{deal.sell_price:,}",
+                                f"{deal.gross_profit:,}",
+                                deal.gross_margin_pct,
+                                deal.amazon_asin,
+                                deal.yahoo_title[:50],
+                            )
+                            continue
                             # Price ratio guard: Yahoo price too low vs Amazon
                             # → likely an accessory/part, not the real product
                             yahoo_total = deal.yahoo_price + (deal.yahoo_shipping or 0)
