@@ -600,23 +600,31 @@ _MERGE_PREFIX_WORDS = frozenset({"hero"})
 def _merge_product_number_tokens(tokens: list[str]) -> list[str]:
     """Merge product line names with adjacent number tokens.
 
-    Example: ["gopro", "hero", "12", "black"] → ["gopro", "hero12", "black"]
-    Handles GoPro Hero series where katakana "ヒーロー12" splits into
-    "hero" + "12" after synonym replacement.
+    Two strategies:
+    1. Explicit: known prefix words (e.g. "hero" + "12" → "hero12")
+    2. General: short letter-only token (2-4 chars, not a common word/brand)
+       + digit token → merge (e.g. "ie" + "200" → "ie200")
     """
+    brand_names = set(_BRAND_ALIASES.values())
     result: list[str] = []
     i = 0
     while i < len(tokens):
-        if (
-            i + 1 < len(tokens)
-            and tokens[i] in _MERGE_PREFIX_WORDS
-            and tokens[i + 1].isdigit()
-        ):
-            result.append(tokens[i] + tokens[i + 1])
-            i += 2
-        else:
-            result.append(tokens[i])
-            i += 1
+        if i + 1 < len(tokens) and tokens[i + 1].isdigit():
+            t = tokens[i]
+            # Explicit merge list
+            if t in _MERGE_PREFIX_WORDS:
+                result.append(t + tokens[i + 1])
+                i += 2
+                continue
+            # General: short letter-only prefix (2-4 chars)
+            # that isn't a common word or brand → likely a model prefix
+            if (t.isalpha() and 2 <= len(t) <= 4
+                    and t not in COMMON_WORDS and t not in brand_names):
+                result.append(t + tokens[i + 1])
+                i += 2
+                continue
+        result.append(tokens[i])
+        i += 1
     return result
 
 

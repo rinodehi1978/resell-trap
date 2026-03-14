@@ -559,19 +559,17 @@ class DealScanner:
                             and deal.gross_profit >= settings.deal_min_gross_profit
                         ):
                             stats["profit_passed"] += 1
-                            # Image verification (label, not gate)
+                            # Image verification (gate: reject mismatches)
                             if self._image_verifier:
                                 verified, alt_asin = await self._verify_image_match(
                                     deal, product,
                                 )
                                 if verified is False:
                                     stats["image_rejected"] += 1
-                                    deal.image_verified = False
-                                elif verified is True:
-                                    deal.image_verified = True
-                                    if alt_asin:
-                                        deal.amazon_asin = alt_asin
-                                # None (error) → leave as None
+                                    continue  # Skip mismatched images
+                                if verified is True and alt_asin:
+                                    deal.amazon_asin = alt_asin
+                                # None (error) → let through
                             deals.append(deal)
 
                 if not deals:
@@ -735,23 +733,11 @@ class DealScanner:
         amazon_url = f"https://amazon.co.jp/dp/{deal.amazon_asin}"
 
         if self._webhook_type == "discord":
-            # Image verification label
-            img_verified = getattr(deal, "image_verified", None)
-            if img_verified is True:
-                img_label = "\u2705 画像一致"
-                embed_color = 0x00C853  # Green
-            elif img_verified is False:
-                img_label = "\u26a0\ufe0f 画像不一致"
-                embed_color = 0xFFA000  # Amber
-            else:
-                img_label = "\u2753 未確認"
-                embed_color = 0x00C853  # Green
-
             payload = {
                 "embeds": [{
                     "title": f"Deal: {deal.yahoo_title[:100]}",
                     "url": yahoo_url,
-                    "color": embed_color,
+                    "color": 0x00C853,  # Green
                     "fields": [
                         {
                             "name": "Yahoo",
@@ -775,11 +761,6 @@ class DealScanner:
                         {
                             "name": "ランク",
                             "value": f"{deal.sales_rank:,}" if deal.sales_rank else "-",
-                            "inline": True,
-                        },
-                        {
-                            "name": "画像",
-                            "value": img_label,
                             "inline": True,
                         },
                         {
