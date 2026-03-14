@@ -626,8 +626,19 @@ class DealScanner:
                 )
                 return None
 
-        # Liveness check removed: search uses select=selling (active only).
-        # Individual fetch_auction calls caused Yahoo rate-limiting (all 404).
+        # Lightweight liveness check: only runs for post-dedup deals (2-3/cycle).
+        # Previous full-scan liveness hit all matched deals → Yahoo rate-limit.
+        try:
+            client = await self._scraper._client._get_client()
+            resp = await client.head(
+                f"https://page.auctions.yahoo.co.jp/jp/auction/{deal.yahoo_auction_id}",
+                timeout=5,
+            )
+            if resp.status_code in (404, 410):
+                logger.info("Auction %s gone (HTTP %s) — skipping", deal.yahoo_auction_id, resp.status_code)
+                return None
+        except Exception:
+            pass  # Network error — don't block the deal
 
         # Record alert BEFORE webhook (crash-safe: prevents duplicate notifications)
         alert = DealAlert(
